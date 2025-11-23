@@ -12,5 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Create a non-root user
+RUN useradd -m appuser
+USER appuser
+
 # Set entrypoint
 CMD ["python", "main.py"]

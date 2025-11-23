@@ -1,0 +1,16 @@
+.git
+.gitignore
+.dockerignore
+.env
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+tests/
+scripts/
+README.md
+cloudbuild.yaml
+deploy.sh
