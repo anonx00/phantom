@@ -23,7 +23,11 @@ class AgentBrain:
         """
         Asks Gemini to identify a trending tech topic.
         """
-        prompt = "Identify a single, specific, currently trending technology topic or news item suitable for a tech influencer tweet. Return ONLY the topic name."
+        prompt = """Identify a single trending topic in tech right now. Focus on:
+        - New AI tools or models (ChatGPT updates, Gemini, Claude, open-source LLMs)
+        - Popular GitHub repositories or developer tools
+        - Tech news (product launches, acquisitions, breakthroughs)
+        Return ONLY the topic name, be specific (e.g., 'Cursor AI Editor' not 'AI Tools')."""
         try:
             response = self.model.generate_content(prompt)
             if not response.text:
@@ -31,7 +35,7 @@ class AgentBrain:
             return response.text.strip()
         except Exception as e:
             logger.error(f"Failed to get trending topic: {e}")
-            return "Artificial Intelligence" # Safe fallback
+            return "Latest GitHub Trending Repos" # Safe fallback
 
     def _check_history(self, topic: str) -> bool:
         """
@@ -68,17 +72,20 @@ class AgentBrain:
         # Retry logic for duplicates
         if self._check_history(topic):
             logger.info("Duplicate topic detected. Requesting alternative.")
-            prompt = f"The topic '{topic}' was already covered. Give me a DIFFERENT trending tech topic. Return ONLY the topic name."
+            prompt = f"""The topic '{topic}' was already covered. Give me a DIFFERENT trending tech topic. Focus on:
+                - New AI tools/models, GitHub repos, or developer tools
+                - Recent tech news or product launches
+                Return ONLY the topic name."""
             try:
                 response = self.model.generate_content(prompt)
                 new_topic = response.text.strip()
                 # Check history again for the new topic
                 if self._check_history(new_topic):
-                     topic = "Python Coding Tips" # Ultimate fallback
+                     topic = "Top GitHub Repos This Week" # Ultimate fallback
                 else:
                      topic = new_topic
             except Exception:
-                topic = "Python Coding Tips" # Fallback
+                topic = "Top GitHub Repos This Week" # Fallback
         
         logger.info(f"Selected Topic: {topic}")
 
@@ -87,7 +94,17 @@ class AgentBrain:
             post_type = "thread"
         else:
             # Ask Gemini if this topic is better for video or text
-            decision_prompt = f"For the tech topic '{topic}', is it better to make a short video or a text thread? Reply with 'VIDEO' or 'THREAD'."
+            decision_prompt = f"""For the tech topic '{topic}', should we create a VIDEO or TEXT THREAD?
+            Use VIDEO if:
+            - The topic benefits from visual demonstration (UI walkthrough, code editor features, terminal commands)
+            - It's a hook/teaser for something visual (app demo, GitHub repo showcase)
+            - It needs to show "before/after" or comparisons
+            
+            Use THREAD if:
+            - It's news, announcements, or opinion-based
+            - It's a list, tips, or step-by-step guide better suited for text
+            
+            Reply ONLY with 'VIDEO' or 'THREAD'."""
             try:
                 decision = self.model.generate_content(decision_prompt).text.strip().upper()
                 # Strict check
@@ -130,7 +147,13 @@ class AgentBrain:
             
         else:
             # Generate Thread
-            thread_prompt = f"Write a 3-tweet thread about '{topic}' for a tech audience. Separate tweets with '|||'."
+            thread_prompt = f"""Write a 3-tweet thread about '{topic}' for a tech influencer audience.
+            Focus on:
+            - Why developers should care
+            - Key features or benefits
+            - Call-to-action (try it, check it out, share thoughts)
+            
+            Separate tweets with '|||'. Keep each tweet under 260 characters."""
             try:
                 response = self.model.generate_content(thread_prompt).text.strip()
                 tweets = response.split("|||")
