@@ -17,10 +17,11 @@ class AgentBrain:
         vertexai.init(project=self.project_id, location=self.location)
         
         # Multi-model configuration with fallback
+        # Using stable model names without version suffixes for better availability
         self.model_names = [
-            "gemini-1.5-flash-002",  # Primary: Latest stable Flash
-            "gemini-1.5-flash",      # Secondary: Stable Flash
-            "gemini-1.5-pro-002",    # Tertiary: Most capable
+            "gemini-1.5-flash",      # Primary: Fast, cost-effective
+            "gemini-1.5-pro",        # Secondary: Most capable
+            "gemini-pro",            # Tertiary: Older but widely available
         ]
         self.models = {}
         
