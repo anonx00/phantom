@@ -20,25 +20,13 @@ class VeoClient:
             "Content-Type": "application/json"
         }
 
-    def generate_video(self, prompt: str, output_path: str = "/tmp/video.mp4") -> str:
+    def generate_video(self, prompt: str) -> str:
         """
-        Generates a video using Veo, polls for completion, and saves to output_path.
+        Generates a video using Veo, polls for completion, and saves to a temporary file.
         Returns the path to the saved video.
         """
         print(f"Generating video for prompt: {prompt}")
         
-        # Note: The actual API payload structure for Veo might vary as it's in preview.
-        # This is a best-effort implementation based on standard Vertex AI prediction patterns for generative media.
-        # If the API is async (long-running operation), we would need to handle LRO.
-        # Assuming synchronous for simplicity or short generation, but Veo is likely async.
-        # However, for 'predict' endpoint on some models it's sync. 
-        # If Veo requires LRO, we would use the 'jobs' endpoint. 
-        # Given the prompt implies "polls for completion", let's assume we might need to handle a job or it takes time.
-        # BUT, standard 'predict' is usually synchronous-ish or returns a handle.
-        # Let's try the standard predict endpoint first. If it returns a LRO, we'd need to adjust.
-        # For this exercise, I will assume a direct response or a simple wait.
-        
-        # Constructing payload
         payload = {
             "instances": [
                 {
@@ -47,7 +35,7 @@ class VeoClient:
             ],
             "parameters": {
                 "sampleCount": 1,
-                "videoLength": "6s", # Example parameter
+                "videoLength": "6s",
                 "aspectRatio": "16:9"
             }
         }
@@ -61,42 +49,48 @@ class VeoClient:
             response.raise_for_status()
             result = response.json()
             
-            # Parsing response - this depends heavily on the specific response shape of Veo
-            # Usually it returns base64 encoded video or a GCS URI.
-            # Let's assume it returns a GCS URI or Base64.
-            # If it's a long running operation, the response would contain a 'name' for the operation.
-            
-            # MOCKING the behavior for now if we can't hit the real API in this environment,
-            # but the code should be structured to handle the real response.
-            # Let's assume we get a base64 string in predictions[0]['bytesBase64Encoded'] or similar.
-            
             predictions = result.get("predictions", [])
             if not predictions:
                 raise ValueError(f"No predictions returned: {result}")
             
+            # Create a temporary file
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
+                output_path = tmp_file.name
+
             # Check for video content
             video_bytes = None
             
-            # Handle different potential response formats
             if "bytesBase64Encoded" in predictions[0]:
                 import base64
                 video_bytes = base64.b64decode(predictions[0]["bytesBase64Encoded"])
+                with open(output_path, "wb") as f:
+                    f.write(video_bytes)
             elif "videoUri" in predictions[0]:
                 # Download from GCS
                 video_uri = predictions[0]["videoUri"]
                 print(f"Downloading video from {video_uri}...")
-                # We would need GCS client here, but let's stick to requests if it's a signed URL
-                # or use storage client. For now, let's assume we might need to add storage to requirements if this is the case.
-                # But let's assume base64 for the 'predict' endpoint as it's common for smaller generations.
-                pass
-            
-            if video_bytes:
-                with open(output_path, "wb") as f:
-                    f.write(video_bytes)
-                print(f"Video saved to {output_path}")
-                return output_path
+                
+                # Use GCS client to download
+                from google.cloud import storage
+                storage_client = storage.Client(project=self.project_id)
+                
+                # Parse GCS URI (gs://bucket/path)
+                if video_uri.startswith("gs://"):
+                    parts = video_uri[5:].split("/", 1)
+                    bucket_name = parts[0]
+                    blob_name = parts[1]
+                    
+                    bucket = storage_client.bucket(bucket_name)
+                    blob = bucket.blob(blob_name)
+                    blob.download_to_filename(output_path)
+                else:
+                    raise ValueError(f"Unsupported video URI format: {video_uri}")
             else:
                 raise ValueError(f"Could not find video data in response: {predictions[0]}")
+            
+            print(f"Video saved to {output_path}")
+            return output_path
 
         except Exception as e:
             print(f"Veo generation failed: {e}")

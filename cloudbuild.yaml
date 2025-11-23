@@ -22,7 +22,7 @@ steps:
       - '--region'
       - '$_REGION'
       - '--set-env-vars'
-      - 'PROJECT_ID=$PROJECT_ID,REGION=$_REGION,BUDGET_MODE=False'
+      - 'PROJECT_ID=$PROJECT_ID,REGION=$_REGION,BUDGET_MODE=$_BUDGET_MODE'
     id: 'Deploy'
 
 substitutions:
@@ -30,6 +30,7 @@ substitutions:
   _REPO_NAME: tech-influencer-repo
   _IMAGE_NAME: tech-influencer-agent
   _JOB_NAME: tech-influencer-job
+  _BUDGET_MODE: "False"
 
 options:
   logging: CLOUD_LOGGING_ONLY

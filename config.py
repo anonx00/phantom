@@ -10,6 +10,15 @@ class Config:
     # Firestore Collection
     COLLECTION_NAME = "post_history"
 
+    @classmethod
+    def validate(cls):
+        """Validates that critical environment variables are set."""
+        if not cls.PROJECT_ID:
+            raise ValueError("Environment variable PROJECT_ID is not set.")
+        if not cls.REGION:
+            raise ValueError("Environment variable REGION is not set.")
+
+
 def get_secret(secret_id: str, project_id: str = None) -> str:
     """
     Fetches a secret from Google Cloud Secret Manager.

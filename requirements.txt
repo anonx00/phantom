@@ -1,5 +1,6 @@
-google-cloud-aiplatform
-google-cloud-firestore
-google-cloud-secret-manager
-tweepy
-requests
+google-cloud-aiplatform==1.38.0
+google-cloud-firestore==2.14.0
+google-cloud-secret-manager==2.18.0
+tweepy==4.14.0
+requests==2.31.0
+google-auth==2.27.0
