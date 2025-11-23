@@ -208,14 +208,59 @@ class AgentBrain:
             strategy["video_prompt"] = visual_prompt
             
         else:
-            # Generate Thread
-            thread_prompt = f"""Write a 3-tweet thread about '{topic}' for a tech influencer audience.
-            Focus on:
-            - Why developers should care
-            - Key features or benefits
-            - Call-to-action (try it, check it out, share thoughts)
+            # Generate Thread with News Research
+            logger.info(f"Researching news about: {topic}")
             
-            Separate tweets with '|||'. Keep each tweet under 260 characters."""
+            # Step 1: Research real news about the topic
+            news_prompt = f"""Find recent tech news about "{topic}".
+            
+            Provide:
+            - A real, specific headline or announcement
+            - 2-3 sentence summary of what happened
+            - Source (company blog, TechCrunch, Verge, HackerNews, etc.)
+            - Why this matters to developers/tech people
+            
+            Format: HEADLINE: ... | SUMMARY: ... | SOURCE: ... | WHY: ...
+            
+            Focus on concrete news like: product launches, funding rounds, acquisitions, major updates, controversies, or technical breakthroughs."""
+            
+            try:
+                news_info = self._generate_with_fallback(news_prompt)
+                logger.info(f"Found news: {news_info[:100]}...")
+            except Exception as e:
+                logger.warning(f"News research failed: {e}")
+                news_info = f"Recent developments in {topic}"
+            
+            # Step 2: Generate authentic thread based on real news
+            thread_prompt = f"""You're a tech professional sharing news on Twitter/X. Write a 3-tweet thread.
+
+NEWS RESEARCH:
+{news_info}
+
+STYLE GUIDE (CRITICAL - this must sound human, not bot):
+✓ Write like you're texting a tech friend, not selling a product
+✓ First tweet: Share the news + cite source in parentheses
+✓ Second tweet: Your genuine take or why it matters  
+✓ Third tweet: Specific implication, question, or prediction
+✓ Conversational tone - use "I think", "Honestly", "Curious if"
+✓ Max 1-2 total hashtags (not per tweet)
+✓ Only use emoji if it genuinely adds value (0-1 total)
+✓ NO marketing words: "game-changer", "revolutionary", "unlock", "dive deep"
+✓ NO excessive punctuation (!!!) or hype
+✗ Sound like actual insight, not a press release
+
+FORMAT: Separate tweets with |||
+Each tweet: under 260 characters
+
+EXAMPLE (tone we want):
+"Anthropic just released Claude 3.5 Sonnet with updated training data through April 2024. Also added artifact creation. (via Anthropic blog)
+|||
+Honestly the artifact feature is clever - generates working apps/docs you can iterate on. Could change how people prototype with LLMs.
+|||
+Curious if this pushes OpenAI to update GPT-4's cutoff date sooner. Anyone tested the new vision capabilities vs GPT-4V?"
+
+Now write about: {topic}"""
+            
             try:
                 response = self._generate_with_fallback(thread_prompt)
                 tweets = response.split("|||")
@@ -230,6 +275,7 @@ class AgentBrain:
             except Exception as e:
                 logger.error(f"Failed to generate thread: {e}")
                 raise # Fail instead of using fallback
+
 
         return strategy
 
