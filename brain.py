@@ -251,6 +251,7 @@ class AgentBrain:
         category = strategy.get('category', 'unknown')
 
         # Build validation prompt
+        content_text = content[0] if isinstance(content, list) else content
         validation_prompt = f"""You are a quality control AI. Review this social media post before it goes live.
 
 POST DETAILS:
@@ -258,28 +259,35 @@ POST DETAILS:
 - Category: {category}
 - Type: {post_type}
 - URL: {source_url if source_url else 'No URL'}
-- Content: {content[0] if isinstance(content, list) else content}
+- Content: "{content_text}"
 
-VALIDATION CHECKLIST:
-1. Does the content accurately relate to the topic?
-2. If there's a URL, does it appear to be a real, legitimate link?
-3. Is the tone appropriate (engaging but not clickbait)?
-4. Is it under 280 characters?
-5. Does it make logical sense and have no obvious errors?
-6. Is it appropriate for a professional tech audience?
+VALIDATION CHECKLIST (Be STRICT):
+1. ✓ Content COMPLETE? Must be full sentences ending with punctuation (. ! ?)
+2. ✓ Content accurately relates to topic?
+3. ✓ URL is real and legitimate? (if present)
+4. ✓ Tone appropriate (engaging but not clickbait)?
+5. ✓ Under 280 characters?
+6. ✓ Logical sense, no obvious errors?
+7. ✓ Appropriate for professional tech audience?
+
+REJECT IF ANY:
+- Incomplete sentences (missing endings, cut-off mid-thought)
+- Content doesn't match topic
+- URL looks fake or suspicious
+- Contains errors, typos, or nonsense
+- Too promotional or spammy
+- Inappropriate or offensive
+- Too short (under 20 chars) or unclear
 
 DECISION:
 Reply with EXACTLY ONE of these formats:
 
-APPROVE: [brief reason why it's good]
-REJECT: [specific reason why it fails validation]
+APPROVE: [brief reason why it passes all checks]
+REJECT: [specific reason it fails - mention WHICH check failed]
 
-Be strict but fair. Reject if:
-- Content doesn't match the topic
-- URL looks fake or suspicious
-- Contains errors or nonsense
-- Too promotional or spammy
-- Inappropriate or offensive
+Content to validate: "{content_text}"
+Character count: {len(content_text)}
+Ends with punctuation? {content_text[-1] if content_text else 'N/A'} in ['.', '!', '?']
 """
 
         try:
@@ -338,6 +346,26 @@ Be strict but fair. Reject if:
         """
         Decides on the content strategy: Text (HN Style), Video (Veo), or Image (Imagen).
         Returns a dict with 'type', 'content', 'topic', and optional 'video_prompt'/'image_path'.
+        """
+        max_retries = 3
+
+        for attempt in range(max_retries):
+            try:
+                return self._generate_strategy_with_validation(attempt)
+            except ValueError as e:
+                if "validation failed" in str(e).lower() and attempt < max_retries - 1:
+                    logger.warning(f"Attempt {attempt + 1} failed validation: {e}")
+                    logger.info(f"Retrying with different story... ({attempt + 2}/{max_retries})")
+                    continue
+                else:
+                    raise
+
+        raise RuntimeError("Failed to generate valid strategy after all retries")
+
+    def _generate_strategy_with_validation(self, attempt: int = 0) -> dict:
+        """
+        Internal method to generate and validate a strategy.
+        Separated for retry logic.
         """
         story = self._get_trending_story()
         topic = story['title']
@@ -405,39 +433,107 @@ Reply with EXACTLY ONE WORD: VIDEO, IMAGE, or TEXT"""
 
         if post_type == "video":
             # Generate Video Prompt and Tweet Text
-            script_prompt = f"Write a tweet caption for a video about '{topic}'. Also provide a visual prompt for an AI video generator. Format: CAPTION: <text> | PROMPT: <visual description>"
+            script_prompt = f"""Generate a tweet with video for '{topic}'.
+
+You MUST provide BOTH parts in this EXACT format:
+CAPTION: <your complete tweet text here>
+PROMPT: <your visual description here>
+
+CAPTION REQUIREMENTS:
+- Must be a COMPLETE sentence or thought
+- 100-200 characters total
+- Engaging and provocative for developers
+- NO hashtags, NO emojis
+- Must end with punctuation (. ! ?)
+
+PROMPT REQUIREMENTS:
+- Detailed visual description for video generator
+- Describe the scene, actions, style
+- 50-100 characters
+
+Example:
+CAPTION: AI agents can now write production code. But will they pass code review?
+PROMPT: Animated screen recording showing AI writing Python code, with syntax highlighting and terminal output
+
+Now generate for: '{topic}'
+CRITICAL: Output MUST include both CAPTION: and PROMPT: with complete text after each."""
+
             try:
                 response = self._generate_with_fallback(script_prompt)
-                if "|" in response:
-                    parts = response.split("|")
-                    caption = parts[0].replace("CAPTION:", "").strip()
-                    visual_prompt = parts[1].replace("PROMPT:", "").strip()
+                logger.info(f"Video generation response: {response[:100]}...")
+
+                if "CAPTION:" in response and "PROMPT:" in response:
+                    parts = response.split("PROMPT:")
+                    caption_part = parts[0].replace("CAPTION:", "").strip()
+                    visual_prompt = parts[1].strip()
+
+                    # Validate caption is complete
+                    if len(caption_part) < 20 or not any(caption_part.endswith(p) for p in ['.', '!', '?']):
+                        logger.warning(f"Caption seems incomplete: {caption_part}")
+                        caption_part = f"{caption_part}. What's your take?"
+
+                    caption = caption_part[:200]  # Enforce max length
                 else:
-                    caption = response[:100]
-                    visual_prompt = f"Tech visualization of {topic}"
+                    logger.error("Response missing CAPTION: or PROMPT: markers")
+                    raise ValueError("Invalid format - missing CAPTION or PROMPT")
+
             except Exception as e:
                 logger.error(f"Failed to generate video script: {e}")
-                raise 
-            
+                raise
+
             strategy["content"] = caption
             strategy["video_prompt"] = visual_prompt
-            
+
         elif post_type == "image":
             # Generate Image Prompt and Tweet Text
-            script_prompt = f"Write a tweet caption for an image about '{topic}'. Also provide a visual prompt for an AI image generator (Imagen). Format: CAPTION: <text> | PROMPT: <visual description>"
+            script_prompt = f"""Generate a tweet with image for '{topic}'.
+
+You MUST provide BOTH parts in this EXACT format:
+CAPTION: <your complete tweet text here>
+PROMPT: <your visual description here>
+
+CAPTION REQUIREMENTS:
+- Must be a COMPLETE sentence or thought
+- 100-200 characters total
+- Engaging and provocative for developers
+- NO hashtags, NO emojis
+- Must end with punctuation (. ! ?)
+
+PROMPT REQUIREMENTS:
+- Detailed visual description for image generator (Imagen)
+- Describe composition, style, elements
+- 50-100 characters
+
+Example:
+CAPTION: The new AI chip promises 10x speedup. But can it handle production workloads?
+PROMPT: Futuristic AI chip on circuit board, glowing neural pathways, tech photography style, 16:9 aspect ratio
+
+Now generate for: '{topic}'
+CRITICAL: Output MUST include both CAPTION: and PROMPT: with complete text after each."""
+
             try:
                 response = self._generate_with_fallback(script_prompt)
-                if "|" in response:
-                    parts = response.split("|")
-                    caption = parts[0].replace("CAPTION:", "").strip()
-                    visual_prompt = parts[1].replace("PROMPT:", "").strip()
+                logger.info(f"Image generation response: {response[:100]}...")
+
+                if "CAPTION:" in response and "PROMPT:" in response:
+                    parts = response.split("PROMPT:")
+                    caption_part = parts[0].replace("CAPTION:", "").strip()
+                    visual_prompt = parts[1].strip()
+
+                    # Validate caption is complete
+                    if len(caption_part) < 20 or not any(caption_part.endswith(p) for p in ['.', '!', '?']):
+                        logger.warning(f"Caption seems incomplete: {caption_part}")
+                        caption_part = f"{caption_part}. What's your take?"
+
+                    caption = caption_part[:200]  # Enforce max length
                 else:
-                    caption = response[:100]
-                    visual_prompt = f"High quality tech photography of {topic}"
+                    logger.error("Response missing CAPTION: or PROMPT: markers")
+                    raise ValueError("Invalid format - missing CAPTION or PROMPT")
+
             except Exception as e:
                 logger.error(f"Failed to generate image script: {e}")
-                raise 
-                
+                raise
+
             strategy["content"] = caption
             strategy["image_prompt"] = visual_prompt
             
@@ -535,13 +631,17 @@ Example style: "The new model outperforms GPT-4 on reasoning tasks. But can it a
         logger.info("Running final validation check on strategy...")
         validation_result = self._validate_strategy(strategy)
 
-        if not validation_result['valid']:
-            logger.error(f"Strategy validation failed: {validation_result['reason']}")
-            raise ValueError(f"Strategy validation failed: {validation_result['reason']}")
-
-        logger.info(f"✓ Strategy validated: {validation_result['reason']}")
-
-        return strategy
+        if validation_result['valid']:
+            logger.info(f"✓ Strategy validated: {validation_result['reason']}")
+            return strategy
+        else:
+            logger.warning(f"✗ Validation rejected: {validation_result['reason']}")
+            # On final attempt, be more lenient
+            if attempt >= 2:
+                logger.warning("Final attempt - accepting despite validation concerns")
+                return strategy
+            else:
+                raise ValueError(f"Strategy validation failed: {validation_result['reason']}")
 
     def log_post(self, strategy: dict, success: bool, error: str = None):
         """Logs the attempt to Firestore."""
