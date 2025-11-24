@@ -2,17 +2,35 @@ import logging
 import requests
 from typing import Dict, List, Optional
 import random
+import feedparser
 
 logger = logging.getLogger(__name__)
 
 class NewsFetcher:
-    """Fetches real tech news from various sources."""
+    """Fetches real tech news from various sources including AI, crypto, and finance."""
 
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (compatible; TechInfluencerBot/1.0)'
         })
+
+        # RSS feeds for different categories
+        self.feeds = {
+            'ai': [
+                'https://blog.google/technology/ai/rss/',
+                'https://openai.com/blog/rss.xml',
+                'https://www.anthropic.com/news/rss.xml',
+            ],
+            'crypto': [
+                'https://cointelegraph.com/rss',
+                'https://www.coindesk.com/arc/outboundfeeds/rss/',
+            ],
+            'finance': [
+                'https://finance.yahoo.com/news/rssindex',
+                'https://www.cnbc.com/id/100003114/device/rss/rss.html',
+            ]
+        }
 
     def fetch_hacker_news_top_stories(self, limit: int = 30) -> List[Dict]:
         """
@@ -57,28 +75,71 @@ class NewsFetcher:
             logger.error(f"Failed to fetch Hacker News: {e}")
             return []
 
-    def fetch_tech_news_from_sources(self) -> List[Dict]:
+    def fetch_rss_feed(self, feed_url: str, category: str, limit: int = 10) -> List[Dict]:
         """
-        Fetches tech news from multiple curated sources.
-        Returns list of {title, url, source} dicts.
+        Fetches stories from an RSS feed.
+        Returns list of {title, url, source, category} dicts.
         """
         stories = []
+        try:
+            feed = feedparser.parse(feed_url)
 
-        # Try Hacker News first (most reliable)
-        hn_stories = self.fetch_hacker_news_top_stories()
-        stories.extend(hn_stories)
+            for entry in feed.entries[:limit]:
+                if hasattr(entry, 'link') and hasattr(entry, 'title'):
+                    stories.append({
+                        'title': entry.title,
+                        'url': entry.link,
+                        'score': 0,  # RSS feeds don't have scores
+                        'source': feed.feed.get('title', category),
+                        'category': category
+                    })
 
-        # Could add more sources here:
-        # - TechCrunch RSS
-        # - The Verge RSS
-        # - Ars Technica RSS
+            logger.info(f"✓ Fetched {len(stories)} stories from {category} RSS")
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch RSS from {feed_url}: {e}")
 
         return stories
 
-    def get_trending_story(self) -> Optional[Dict]:
+    def fetch_tech_news_from_sources(self) -> List[Dict]:
         """
-        Gets a single trending tech story suitable for posting.
-        Prioritizes high-scoring stories and filters for interesting topics.
+        Fetches tech news from multiple curated sources.
+        Includes AI, crypto, finance, and general tech.
+        Returns list of {title, url, source, category} dicts.
+        """
+        stories = []
+
+        # 1. Hacker News (most reliable for tech/dev content)
+        hn_stories = self.fetch_hacker_news_top_stories()
+        for story in hn_stories:
+            story['category'] = 'tech'
+        stories.extend(hn_stories)
+
+        # 2. AI News RSS Feeds
+        for feed_url in self.feeds['ai']:
+            ai_stories = self.fetch_rss_feed(feed_url, 'ai', limit=5)
+            stories.extend(ai_stories)
+
+        # 3. Crypto News RSS Feeds
+        for feed_url in self.feeds['crypto']:
+            crypto_stories = self.fetch_rss_feed(feed_url, 'crypto', limit=5)
+            stories.extend(crypto_stories)
+
+        # 4. Finance News RSS Feeds
+        for feed_url in self.feeds['finance']:
+            finance_stories = self.fetch_rss_feed(feed_url, 'finance', limit=5)
+            stories.extend(finance_stories)
+
+        logger.info(f"✓ Total stories fetched: {len(stories)} across all sources")
+        return stories
+
+    def get_trending_story(self, preferred_categories: List[str] = None) -> Optional[Dict]:
+        """
+        Gets a single trending story suitable for posting.
+        Prioritizes AI, then crypto, then finance, then general tech.
+
+        Args:
+            preferred_categories: List of categories to prefer ['ai', 'crypto', 'finance', 'tech']
         """
         stories = self.fetch_tech_news_from_sources()
 
@@ -86,28 +147,49 @@ class NewsFetcher:
             logger.warning("No stories fetched from any source")
             return None
 
-        # Filter for tech-relevant keywords
-        tech_keywords = [
-            'ai', 'ml', 'llm', 'gpt', 'claude', 'gemini', 'openai',
-            'programming', 'developer', 'code', 'python', 'javascript',
-            'framework', 'library', 'open source', 'github',
-            'startup', 'google', 'microsoft', 'meta', 'apple',
-            'api', 'database', 'cloud', 'aws', 'gcp', 'azure',
-            'security', 'privacy', 'crypto', 'blockchain',
-            'web', 'mobile', 'app', 'software', 'hardware'
-        ]
+        # Default preference: AI > crypto > finance > tech
+        if not preferred_categories:
+            preferred_categories = ['ai', 'crypto', 'finance', 'tech']
 
-        # Score stories based on relevance and popularity
+        # Enhanced keywords with category-specific scoring
+        keyword_weights = {
+            'ai': ['ai', 'artificial intelligence', 'machine learning', 'ml', 'llm', 'neural',
+                   'gpt', 'claude', 'gemini', 'openai', 'anthropic', 'deepmind', 'chatgpt',
+                   'transformer', 'model', 'training', 'inference'],
+            'crypto': ['crypto', 'bitcoin', 'ethereum', 'blockchain', 'defi', 'nft',
+                      'web3', 'token', 'mining', 'wallet', 'exchange', 'coin'],
+            'finance': ['stock', 'market', 'trading', 'investment', 'economy', 'fed',
+                       'inflation', 'earnings', 'revenue', 'ipo', 'merger'],
+            'tech': ['programming', 'developer', 'code', 'python', 'javascript',
+                    'framework', 'library', 'open source', 'github', 'api',
+                    'startup', 'google', 'microsoft', 'meta', 'apple']
+        }
+
+        # Score stories based on relevance and category preference
         scored_stories = []
         for story in stories:
             title_lower = story['title'].lower()
+            category = story.get('category', 'tech')
 
-            # Calculate relevance score
-            keyword_matches = sum(1 for kw in tech_keywords if kw in title_lower)
-            hn_score = story.get('score', 0)
+            # Category preference bonus (AI gets highest)
+            category_bonus = 0
+            if category in preferred_categories:
+                category_bonus = (len(preferred_categories) - preferred_categories.index(category)) * 100
 
-            # Combined score: keyword relevance + HN score
-            combined_score = (keyword_matches * 50) + (hn_score / 10)
+            # Keyword matching score
+            keyword_score = 0
+            for cat, keywords in keyword_weights.items():
+                matches = sum(1 for kw in keywords if kw in title_lower)
+                if cat == category:
+                    keyword_score += matches * 30  # Higher weight for category-specific keywords
+                else:
+                    keyword_score += matches * 10
+
+            # HN score (if available)
+            hn_score = story.get('score', 0) / 10
+
+            # Combined score: category bonus + keyword score + HN score
+            combined_score = category_bonus + keyword_score + hn_score
 
             scored_stories.append({
                 **story,
@@ -117,11 +199,16 @@ class NewsFetcher:
         # Sort by relevance
         scored_stories.sort(key=lambda x: x['relevance_score'], reverse=True)
 
+        # Log top 5 for debugging
+        logger.info("Top 5 stories by score:")
+        for i, story in enumerate(scored_stories[:5]):
+            logger.info(f"  {i+1}. [{story['category'].upper()}] {story['title'][:40]}... (score: {story['relevance_score']:.1f})")
+
         # Pick from top 5 to add some variety
         top_stories = scored_stories[:5]
         if top_stories:
             selected = random.choice(top_stories)
-            logger.info(f"Selected story: {selected['title'][:60]}... (score: {selected['relevance_score']:.1f})")
+            logger.info(f"✓ Selected: [{selected['category'].upper()}] {selected['title'][:60]}... (score: {selected['relevance_score']:.1f})")
             return selected
 
         return None

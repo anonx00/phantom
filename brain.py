@@ -239,6 +239,69 @@ class AgentBrain:
             logger.warning(f"Firestore history check failed: {e}. Proceeding without check.")
             return False
 
+    def _validate_strategy(self, strategy: dict) -> dict:
+        """
+        Final validation check - AI reviews the strategy to ensure it makes sense.
+        Returns dict with {'valid': bool, 'reason': str}
+        """
+        post_type = strategy.get('type')
+        topic = strategy.get('topic')
+        content = strategy.get('content')
+        source_url = strategy.get('source_url')
+        category = strategy.get('category', 'unknown')
+
+        # Build validation prompt
+        validation_prompt = f"""You are a quality control AI. Review this social media post before it goes live.
+
+POST DETAILS:
+- Topic: "{topic}"
+- Category: {category}
+- Type: {post_type}
+- URL: {source_url if source_url else 'No URL'}
+- Content: {content[0] if isinstance(content, list) else content}
+
+VALIDATION CHECKLIST:
+1. Does the content accurately relate to the topic?
+2. If there's a URL, does it appear to be a real, legitimate link?
+3. Is the tone appropriate (engaging but not clickbait)?
+4. Is it under 280 characters?
+5. Does it make logical sense and have no obvious errors?
+6. Is it appropriate for a professional tech audience?
+
+DECISION:
+Reply with EXACTLY ONE of these formats:
+
+APPROVE: [brief reason why it's good]
+REJECT: [specific reason why it fails validation]
+
+Be strict but fair. Reject if:
+- Content doesn't match the topic
+- URL looks fake or suspicious
+- Contains errors or nonsense
+- Too promotional or spammy
+- Inappropriate or offensive
+"""
+
+        try:
+            response = self._generate_with_fallback(validation_prompt)
+            response_upper = response.upper()
+
+            if 'APPROVE' in response_upper:
+                reason = response.split(':', 1)[1].strip() if ':' in response else response
+                return {'valid': True, 'reason': reason}
+            elif 'REJECT' in response_upper:
+                reason = response.split(':', 1)[1].strip() if ':' in response else response
+                return {'valid': False, 'reason': reason}
+            else:
+                # Unclear response, err on the side of caution
+                logger.warning(f"Unclear validation response: {response}")
+                return {'valid': False, 'reason': f"Validation unclear: {response}"}
+
+        except Exception as e:
+            logger.error(f"Validation check failed: {e}")
+            # If validation fails, approve by default (don't block posting)
+            return {'valid': True, 'reason': f"Validation check error, proceeding: {e}"}
+
     def generate_image(self, prompt: str) -> str:
         """
         Generates an image using Imagen 3 Fast and saves it to a temp file.
@@ -466,6 +529,17 @@ Example style: "The new model outperforms GPT-4 on reasoning tasks. But can it a
 
             strategy["content"] = [tweet]
             strategy["source_url"] = story_url  # Track the source
+            strategy["category"] = story.get('category', 'tech')  # Track category
+
+        # FINAL VALIDATION: AI checks if everything makes sense before posting
+        logger.info("Running final validation check on strategy...")
+        validation_result = self._validate_strategy(strategy)
+
+        if not validation_result['valid']:
+            logger.error(f"Strategy validation failed: {validation_result['reason']}")
+            raise ValueError(f"Strategy validation failed: {validation_result['reason']}")
+
+        logger.info(f"✓ Strategy validated: {validation_result['reason']}")
 
         return strategy
 
