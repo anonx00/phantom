@@ -274,29 +274,35 @@ WHY: [impact/relevance to {target_audience}]
         }
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    def _check_history(self, topic: str) -> bool:
+    def _check_history(self, topic: str, url: str = None) -> bool:
         """
-        Checks Firestore to see if we've recently posted about this topic.
+        Checks Firestore to see if we've recently posted about this topic or URL.
         Returns True if we should SKIP this topic (duplicate), False otherwise.
         """
         try:
-            # Check last 20 posts
-            docs = self.collection.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(20).stream()
-            
+            # Check last 30 posts (increased from 20 for better duplicate detection)
+            docs = self.collection.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(30).stream()
+
             def _normalize(text):
                 return set(text.lower().split())
-            
+
             current_words = _normalize(topic)
-            
+
             for doc in docs:
                 data = doc.to_dict()
                 stored_topic = data.get("topic", "")
+                stored_url = data.get("source_url", "")
+
+                # PRIORITY CHECK: Same URL = definitely a duplicate
+                if url and stored_url and url == stored_url:
+                    logger.info(f"URL '{url}' was already posted. Skipping to avoid duplicate.")
+                    return True
+
+                # Keyword overlap check (Jaccard similarity) for topic
                 stored_words = _normalize(stored_topic)
-                
-                # Keyword overlap check (Jaccard similarity)
                 if not current_words: continue
                 overlap = len(stored_words & current_words) / len(current_words)
-                
+
                 if overlap > 0.6: # 60% overlap
                     logger.info(f"Topic '{topic}' matches recent post '{stored_topic}' (Overlap: {overlap:.2f}). Skipping.")
                     return True
@@ -536,9 +542,9 @@ Does it relate to actual topic "{topic}"? Are all claims real?
         story_url = story.get('url')  # Real URL or None
         story_context = story.get('context', f"Article: {topic}")  # Rich context from article
 
-        # Retry logic for duplicates
-        if self._check_history(topic):
-            logger.info("Duplicate topic detected. Requesting alternative.")
+        # Retry logic for duplicates (check both topic AND URL)
+        if self._check_history(topic, story_url):
+            logger.info("Duplicate detected (topic or URL). Requesting alternative.")
             # Try to get a different story
             try:
                 for _ in range(3):  # Try up to 3 times
@@ -547,7 +553,7 @@ Does it relate to actual topic "{topic}"? Are all claims real?
                     story_url = story.get('url')
                     story_context = story.get('context', f"Article: {topic}")
 
-                    if not self._check_history(topic):
+                    if not self._check_history(topic, story_url):
                         break
                 else:
                     logger.warning("All alternatives were duplicates, proceeding with latest")
