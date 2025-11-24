@@ -1,5 +1,6 @@
 import logging
 import vertexai
+from typing import List, Optional, Dict
 from google.cloud import aiplatform
 from vertexai.generative_models import GenerativeModel, Tool
 from vertexai.preview.generative_models import grounding
@@ -410,7 +411,15 @@ WHY: [impact/relevance to {target_audience}]
             "to be honest",
             "if i'm being honest",
             ", really",
-            "really."
+            "really.",
+            "good to see",  # observational/preachy
+            "great to see",  # observational/preachy
+            "nice to see",  # observational/preachy
+            "makes sense",  # explaining the obvious
+            " to think about",  # meta-commentary ("wild to think about", "crazy to think about")
+            "gotta ",  # forced casual ("gotta test", "gotta try")
+            "popping up",  # awkward phrasing
+            "starting to ",  # unnecessary hedge ("starting to help")
         ]
 
         # US-centric phrases to reject (bot is Australian, should be global)
@@ -451,6 +460,14 @@ WHY: [impact/relevance to {target_audience}]
                     'valid': False,
                     'reason': f"US-centric language - contains '{phrase}'. Use global perspective (bot is Australian, not American)."
                 }
+
+        # Check for filler words at the start
+        if content_text.startswith("So,") or content_text.startswith("So "):
+            logger.warning(f"Pre-validation REJECT: Starts with filler word 'So': {content_text}")
+            return {
+                'valid': False,
+                'reason': "Don't start tweets with filler word 'So'. Jump straight to the point."
+            }
 
         validation_prompt = f"""You are a STRICT quality control AI. Your job is to REJECT fake, made-up, or misleading content.
 
@@ -1074,8 +1091,14 @@ GOOD Examples (SHORT, PUNCHY, CASUAL, GLOBAL):
 "GPT-5 cuts hallucinations by 40%. Guess we're getting somewhere."
 "Rust adoption up 67% at Fortune 500. Memory safety wins."
 
-BAD Examples (FORMAL/WORDY/US-CENTRIC - NEVER DO THIS):
-X "Good to see tech getting built on home soil" (US-centric, assumes US is home)
+BAD Examples (FORMAL/WORDY/US-CENTRIC/PREACHY - NEVER DO THIS):
+X "Good to see tech getting built on home soil" (PREACHY + US-centric)
+X "Good to see them focusing on real-world risks" (PREACHY, observational)
+X "Good to see some verification popping up" (PREACHY + awkward phrasing)
+X "This is pretty wild to think about" (META-COMMENTARY)
+X "Makes sense – gotta test this stuff" (EXPLAINING THE OBVIOUS)
+X "So, evals are the next big thing" (FILLER WORD START)
+X "Starting to help scientists" (UNNECESSARY HEDGE)
 X "About time chip production came home" (US-centric)
 X "Bringing tech production stateside" (US-centric)
 X "Feels like a big step towards..." (TOO WORDY)
