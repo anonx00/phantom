@@ -486,15 +486,37 @@ Does it relate to actual topic "{topic}"? Are all claims real?
             post_type = "text"
         else:
             logger.info("BUDGET_MODE disabled, deciding optimal format for media generation")
-            # Ask Gemini if this topic is better for video, image, or text
-            decision_prompt = f"""For the tech news '{topic}', what is the BEST visual format?
+            # Ask AI if media actually adds value or if text + link is better
+            decision_prompt = f"""For this tech news, decide if MEDIA adds value or if TEXT + LINK is better.
 
-Consider:
-- VIDEO: Product demos, UI animations, dynamic visualizations, tutorials
-- IMAGE: Product launches, devices, infographics, architecture diagrams, logos, concepts
-- TEXT: Pure text news, policy changes, financial updates, abstract concepts
+ARTICLE CONTEXT:
+{story_context}
 
-IMPORTANT: Prefer VIDEO or IMAGE when possible for engagement. Only choose TEXT if the topic is truly text-heavy or abstract.
+TOPIC: {topic}
+HAS URL: {'Yes - Twitter will show preview card' if story_url else 'No URL available'}
+
+DECISION CRITERIA:
+
+Choose VIDEO only if:
+- Article explains a PROCESS or WORKFLOW (step-by-step)
+- Article describes HOW something works (algorithm, architecture)
+- Visual sequence would make it clearer
+- Example: "How transformer attention works", "Video generation pipeline"
+
+Choose IMAGE only if:
+- Article is about a NEW PRODUCT/DEVICE that needs visualization
+- Complex architecture/diagram would help understanding
+- Before/after comparison is meaningful
+- Example: "New chip design", "UI redesign comparison"
+
+Choose TEXT if:
+- Simple announcement or partnership (like "X partners with Y")
+- Financial/business news without technical process
+- Twitter link preview card is sufficient
+- Media would be redundant with preview
+- Example: "Company raises $X", "Partnership announced"
+
+IMPORTANT: Don't generate redundant media just for engagement. If the Twitter link preview card shows the story well, use TEXT. Only generate media if it EXPLAINS or VISUALIZES something complex.
 
 Reply with EXACTLY ONE WORD: VIDEO, IMAGE, or TEXT"""
 
@@ -547,7 +569,8 @@ CAPTION REQUIREMENTS:
 - Do NOT invent product names, versions, or features beyond what's in the context
 - Must be a COMPLETE sentence ending with punctuation (. ! ?)
 - 100-175 characters total (leaves room for URL)
-- Engaging question or observation that sparks discussion
+- Sound CASUAL and HUMAN, not robotic or formal
+- NO formal questions like "How will this impact..." or "What does this mean for..."
 - NO marketing language ("Unleash", "Revolutionary", etc.)
 - NO hashtags, NO emojis
 
@@ -582,12 +605,16 @@ X "Cool AI stuff" (not specific enough, ignores article context)
 
 GOOD Examples (USING ARTICLE CONTEXT):
 If article says "GPT-5 reduces hallucinations by 40%":
-CAPTION: "GPT-5 cuts hallucinations by 40%. Is this the reliability breakthrough?"
+CAPTION: "GPT-5 cuts hallucinations by 40%. Finally getting somewhere with reliability."
 PROMPT: "Split screen showing GPT-4 vs GPT-5 accuracy charts, bars rising to show 40% improvement, transition to checkmark appearing over error-prone outputs"
 
 If article says "Rust adoption grows 67% among Fortune 500":
-CAPTION: "Fortune 500 companies went 67% more Rust this year. Memory safety paying off?"
+CAPTION: "Fortune 500 went 67% more Rust this year. Memory safety wins."
 PROMPT: "Animated bar chart racing showing programming language adoption, Rust bar surging 67% upward past other languages, corporate logos appearing on rising bar"
+
+BAD (too formal):
+X "How will this impact the future of AI reliability?" (robotic question)
+X "What does increased Rust adoption mean for enterprise?" (textbook tone)
 
 CRITICAL: Write COMPLETE, STANDALONE caption using REAL details from the article context. NO placeholder text!
 
@@ -665,7 +692,8 @@ CAPTION REQUIREMENTS:
 - Do NOT invent product names, versions, or features beyond what's in the context
 - Must be a COMPLETE sentence ending with punctuation (. ! ?)
 - 100-175 characters total (leaves room for URL)
-- Engaging question or observation that sparks discussion
+- Sound CASUAL and HUMAN, not robotic or formal
+- NO formal questions like "How will this impact..." or "What does this mean for..."
 - NO marketing language ("Unleash", "Revolutionary", etc.)
 - NO hashtags, NO emojis
 
@@ -680,16 +708,20 @@ PROMPT REQUIREMENTS FOR IMAGE (IMPORTANT - BE SPECIFIC TO THE ARTICLE):
 
 EXAMPLES USING ARTICLE CONTEXT:
 If article says "Gemini lets you tap on image parts for definitions":
-CAPTION: "Gemini now lets you tap image parts for definitions. How can this deepen learning?"
+CAPTION: "Gemini lets you tap on image parts for instant definitions. Finally, a feature that actually makes sense."
 PROMPT: "Smartphone screen showing Gemini app with an educational image, finger tapping on a specific object, definition popup appearing with explanation text, interactive UI elements glowing"
 
 If article says "New MacBook Pro M4 chip benchmarks leaked":
-CAPTION: "M4 MacBook Pro benchmarks just leaked. 30% faster than M3. Worth the upgrade?"
+CAPTION: "M4 MacBook Pro benchmarks leaked. 30% faster than M3. Expensive upgrade season incoming."
 PROMPT: "Professional product photo of MacBook Pro with glowing M4 chip visualization, performance graphs floating above screen showing 30% increase, dramatic tech lighting"
 
 If article says "GitHub Copilot now writes entire functions":
-CAPTION: "GitHub Copilot now writes full functions. Are junior devs obsolete?"
+CAPTION: "Copilot now writes entire functions. Junior dev job market about to get interesting."
 PROMPT: "Split screen showing code editor with GitHub Copilot logo, left side showing developer typing partial code, right side auto-completing entire function, sleek modern tech aesthetic"
+
+BAD (too formal):
+X "How can this deepen learning experiences?" (robotic)
+X "Are junior developers obsolete?" (textbook question)
 
 BAD Examples (NEVER DO THIS):
 X "Unleash creativity with Gemini 3 Pro Image!" (made up, marketing)
@@ -758,25 +790,49 @@ Now generate for the article above.
             if story_url:
                 # We have a REAL URL from news fetcher!
                 logger.info(f"Using real URL: {story_url}")
-                post_prompt = f"""Write an engaging developer-focused tweet about this story:
+                post_prompt = f"""Write a casual, engaging tweet about this tech news.
+
+ARTICLE CONTEXT:
+{story_context}
 
 Title: "{topic}"
 URL: {story_url}
 
-Format:
-[Bold claim or provocative question about the news]
+TONE: Sound HUMAN and CASUAL, not like a bot or corporate account. Be conversational.
 
-{story_url}
+STRUCTURE (pick ONE style):
 
-[Technical insight that makes developers want to reply]
+Style A - Statement + Short reaction:
+"[Bold statement about the news]. [Short punchy reaction or observation]."
+
+Style B - Fact + Skeptical/curious take:
+"[Interesting fact from article]. [Slightly skeptical or curious comment]."
+
+Style C - Direct observation:
+"[What's happening]. [Why it matters or what's interesting]."
 
 CONSTRAINTS:
-- Total length: Under 280 characters (including the URL above)
-- Use the EXACT URL provided above
+- Total: Under 280 chars (including URL)
+- Use EXACT URL provided: {story_url}
 - NO hashtags, NO emojis
-- Make it engaging and slightly provocative
+- NO formal questions like "How will this impact..." or "What does this mean for..."
+- NO "We" or "Check out" or "Read more" - just tweet the news naturally
+- Sound like a smart person sharing something interesting, not a news bot
 
-Example style: "Finally, a framework that doesn't need 47 config files to start. But will it scale?"
+GOOD Examples:
+"OpenAI and Foxconn building AI factories in the US. About time chip production came home."
+
+"Gemini lets you tap images for instant definitions. Finally, a feature that actually makes sense."
+
+"GPT-5 cuts hallucinations by 40%. Guess we're one step closer to trusting these things."
+
+BAD Examples:
+X "How will this impact domestic tech production?" (too formal/robotic)
+X "What does this mean for the future of AI?" (cliche question)
+X "This could revolutionize everything!" (overhype)
+X "Check out this amazing news!" (bot-like)
+
+Generate the tweet:
 """
             else:
                 # No URL available - text-only tweet
