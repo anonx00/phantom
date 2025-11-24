@@ -116,8 +116,55 @@ def main():
                     except Exception as cleanup_error:
                         logger.warning(f"Failed to cleanup video file: {cleanup_error}")
 
-        elif strategy["type"] == "thread":
+        elif strategy["type"] == "image":
+            image_path = None
+            try:
+                image_path = strategy.get("image_path") # brain.py might return content as path or separate field?
+                # Wait, brain.py returns 'content' as caption and 'image_prompt' as prompt.
+                # But brain.py generate_image method returns the path.
+                # Ah, get_strategy in brain.py doesn't call generate_image! 
+                # It just returns the prompt. main.py needs to call generate_image?
+                # No, brain.py has generate_image method but get_strategy doesn't call it.
+                # Let's check brain.py again.
+                
+                # In brain.py:
+                # strategy["content"] = caption
+                # strategy["image_prompt"] = visual_prompt
+                
+                # So main.py needs to call brain.generate_image(strategy["image_prompt"])
+                
+                image_path = brain.generate_image(strategy["image_prompt"])
+                
+                # Upload Image
+                media = api_v1.media_upload(image_path)
+                
+                # Post Tweet with Image
+                client_v2.create_tweet(text=strategy["content"], media_ids=[media.media_id])
+                logger.info("Image posted successfully!")
+                brain.log_post(strategy, success=True)
+                
+            except Exception as e:
+                logger.error(f"Image generation or upload failed: {e}")
+                # Fallback to text
+                try:
+                    client_v2.create_tweet(text=strategy["content"])
+                    brain.log_post(strategy, success=False, error=f"Image failed, posted text. Error: {e}")
+                except Exception as fallback_error:
+                    brain.log_post(strategy, success=False, error=f"Image and Fallback failed. Error: {e}")
+                    sys.exit(1)
+            finally:
+                if image_path and os.path.exists(image_path):
+                    try:
+                        os.remove(image_path)
+                    except:
+                        pass
+
+        elif strategy["type"] in ["thread", "text"]:
             tweets = strategy["content"]
+            # Ensure it's a list
+            if isinstance(tweets, str):
+                tweets = [tweets]
+                
             previous_tweet_id = None
             posted_tweets = []
             
@@ -136,12 +183,11 @@ def main():
                     previous_tweet_id = response.data['id']
                     posted_tweets.append(previous_tweet_id)
                 
-                logger.info(f"Thread posted successfully! Tweet IDs: {posted_tweets}")
+                logger.info(f"Post successful! IDs: {posted_tweets}")
                 brain.log_post(strategy, success=True)
             except Exception as e:
-                logger.error(f"Failed to post thread: {e}")
-                # We can't easily rollback tweets, but we log the partial failure
-                brain.log_post(strategy, success=False, error=f"Partial thread failure. Posted: {len(posted_tweets)}. Error: {e}")
+                logger.error(f"Failed to post text: {e}")
+                brain.log_post(strategy, success=False, error=f"Partial failure. Posted: {len(posted_tweets)}. Error: {e}")
                 sys.exit(1)
 
     except Exception as e:

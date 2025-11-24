@@ -1,9 +1,11 @@
 import logging
 import vertexai
-from vertexai.generative_models import GenerativeModel
+from vertexai.generative_models import GenerativeModel, Tool, GoogleSearchRetrieval
+from vertexai.preview.vision_models import ImageGenerationModel
 from google.cloud import firestore
 from config import Config
 import datetime
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -15,6 +17,11 @@ class AgentBrain:
         self.location = Config.REGION
         
         vertexai.init(project=self.project_id, location=self.location)
+        
+        # Initialize Google Search Grounding Tool
+        self.search_tool = Tool.from_google_search_retrieval(
+            google_search_retrieval=GoogleSearchRetrieval()
+        )
         
         # Multi-model configuration with dynamic discovery
         # Query Vertex AI to find available Gemini models instead of hardcoding
@@ -61,7 +68,7 @@ class AgentBrain:
         self.db = firestore.Client(project=self.project_id)
         self.collection = self.db.collection(Config.COLLECTION_NAME)
 
-    def _generate_with_fallback(self, prompt: str) -> str:
+    def _generate_with_fallback(self, prompt: str, tools: list = None) -> str:
         """
         Attempts to generate content using available models with fallback.
         Tries each model in order until successful or all fail.
@@ -74,7 +81,8 @@ class AgentBrain:
                 
             try:
                 model = self.models[model_name]
-                response = model.generate_content(prompt)
+                # Pass tools if provided (e.g. Grounding)
+                response = model.generate_content(prompt, tools=tools)
                 
                 if response.text:
                     logger.info(f"✓ Generated content with {model_name}")
@@ -92,14 +100,18 @@ class AgentBrain:
 
     def _get_trending_topic(self) -> str:
         """
-        Asks Gemini to identify a trending tech topic.
+        Asks Gemini to identify a trending tech topic using Google Search Grounding.
         """
-        prompt = """Identify a single trending topic in tech right now. Focus on:
-        - New AI tools or models (ChatGPT updates, Gemini, Claude, open-source LLMs)
-        - Popular GitHub repositories or developer tools
-        - Tech news (product launches, acquisitions, breakthroughs)
-        Return ONLY the topic name, be specific (e.g., 'Cursor AI Editor' not 'AI Tools')."""
-        return self._generate_with_fallback(prompt)
+        prompt = """Find the single most interesting tech news story RIGHT NOW (last 24 hours).
+        Focus on:
+        - Major AI product launches or updates
+        - Significant open source releases
+        - Big tech industry moves
+        
+        Return ONLY the headline/topic name. Be specific."""
+        
+        # Use search tool to get real-time info
+        return self._generate_with_fallback(prompt, tools=[self.search_tool])
 
     def _check_history(self, topic: str) -> bool:
         """
@@ -108,13 +120,10 @@ class AgentBrain:
         """
         try:
             # Check last 20 posts
-            # Note: Requires composite index if using multiple fields, but here we just order by timestamp.
-            # If collection is empty, this returns empty generator, which is fine.
             docs = self.collection.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(20).stream()
             
             for doc in docs:
                 data = doc.to_dict()
-                # Improved matching: Check containment or exact match
                 stored_topic = data.get("topic", "").lower()
                 current_topic = topic.lower()
                 
@@ -126,65 +135,94 @@ class AgentBrain:
             logger.warning(f"Firestore history check failed: {e}. Proceeding without check.")
             return False
 
+    def generate_image(self, prompt: str) -> str:
+        """
+        Generates an image using Imagen 3 and saves it to a temp file.
+        Returns the path to the saved image.
+        """
+        logger.info(f"Generating image for: {prompt}")
+        try:
+            model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+            images = model.generate_images(
+                prompt=prompt,
+                number_of_images=1,
+                aspect_ratio="16:9",
+                safety_filter_level="block_some",
+                person_generation="allow_adult"
+            )
+            
+            if not images:
+                raise ValueError("No images generated")
+                
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                output_path = tmp_file.name
+                
+            images[0].save(location=output_path, include_generation_parameters=False)
+            logger.info(f"Image saved to {output_path}")
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Imagen generation failed: {e}")
+            raise
+
     def get_strategy(self):
         """
-        Decides on the content strategy: Thread (Text) or Video.
-        Returns a dict with 'type', 'content', 'topic', and optional 'video_prompt'.
+        Decides on the content strategy: Text (HN Style), Video (Veo), or Image (Imagen).
+        Returns a dict with 'type', 'content', 'topic', and optional 'video_prompt'/'image_path'.
         """
         topic = self._get_trending_topic()
         
         # Retry logic for duplicates
         if self._check_history(topic):
             logger.info("Duplicate topic detected. Requesting alternative.")
-            prompt = f"""The topic '{topic}' was already covered. Give me a DIFFERENT trending tech topic. Focus on:
-                - New AI tools/models, GitHub repos, or developer tools
-                - Recent tech news or product launches
-                Return ONLY the topic name."""
+            prompt = f"""The topic '{topic}' was already covered. Find a DIFFERENT trending tech news story from the last 24 hours.
+                Return ONLY the headline."""
             try:
-                new_topic = self._generate_with_fallback(prompt)
-                # Check history again for the new topic
+                new_topic = self._generate_with_fallback(prompt, tools=[self.search_tool])
                 if self._check_history(new_topic):
-                     raise ValueError(f"Both '{topic}' and '{new_topic}' are duplicates. No fresh content available.")
+                     raise ValueError(f"Both '{topic}' and '{new_topic}' are duplicates.")
                 else:
                      topic = new_topic
             except Exception as e:
                 logger.error(f"Failed to find alternative topic: {e}")
-                raise # Fail instead of using fallback
+                raise 
         
         logger.info(f"Selected Topic: {topic}")
 
         # Decide format
         if Config.BUDGET_MODE:
-            post_type = "thread"
+            post_type = "text"
         else:
-            # Ask Gemini if this topic is better for video or text
-            decision_prompt = f"""For the tech topic '{topic}', should we create a VIDEO or TEXT THREAD?
-            Use VIDEO if:
-            - The topic benefits from visual demonstration (UI walkthrough, code editor features, terminal commands)
-            - It's a hook/teaser for something visual (app demo, GitHub repo showcase)
-            - It needs to show "before/after" or comparisons
+            # Ask Gemini if this topic is better for video, image, or text
+            decision_prompt = f"""For the tech news '{topic}', what is the best format?
             
-            Use THREAD if:
-            - It's news, announcements, or opinion-based
-            - It's a list, tips, or step-by-step guide better suited for text
+            Reply VIDEO if:
+            - It's a UI demo, animation, or dynamic visual
             
-            Reply ONLY with 'VIDEO' or 'THREAD'."""
+            Reply IMAGE if:
+            - It's a new device, logo, static diagram, or concept art
+            
+            Reply TEXT if:
+            - It's pure news, business update, or code/text heavy
+            
+            Reply ONLY with 'VIDEO', 'IMAGE', or 'TEXT'."""
+            
             try:
                 decision = self._generate_with_fallback(decision_prompt).upper()
-                # Strict check
-                if "VIDEO" in decision and "THREAD" not in decision:
+                if "VIDEO" in decision:
                      post_type = "video"
-                elif "VIDEO" in decision:
-                     post_type = "video" # Lean towards video if mentioned
+                elif "IMAGE" in decision:
+                     post_type = "image"
                 else:
-                     post_type = "thread"
+                     post_type = "text"
             except Exception:
-                post_type = "thread" # Default to thread on error
+                post_type = "text"
 
         strategy = {
             "topic": topic,
             "type": post_type,
-            "timestamp": firestore.SERVER_TIMESTAMP # Use server timestamp
+            "timestamp": firestore.SERVER_TIMESTAMP
         }
 
         if post_type == "video":
@@ -197,84 +235,73 @@ class AgentBrain:
                     caption = parts[0].replace("CAPTION:", "").strip()
                     visual_prompt = parts[1].replace("PROMPT:", "").strip()
                 else:
-                    # Fallback parsing
                     caption = response[:100]
                     visual_prompt = f"Tech visualization of {topic}"
             except Exception as e:
                 logger.error(f"Failed to generate video script: {e}")
-                raise # Fail instead of using fallback
+                raise 
             
             strategy["content"] = caption
             strategy["video_prompt"] = visual_prompt
             
-        else:
-            # Generate Single Tweet with News Research
-            logger.info(f"Researching news about: {topic}")
-            
-            # Step 1: Research real news about the topic
-            news_prompt = f"""Find recent tech news about "{topic}".
-            
-            Provide:
-            - A real, specific headline or announcement
-            - 2-3 sentence summary of what happened
-            - Source (company blog, TechCrunch, Verge, HackerNews, etc.)
-            - Why this matters to developers/tech people
-            
-            Format: HEADLINE: ... | SUMMARY: ... | SOURCE: ... | WHY: ...
-            
-            Focus on concrete news like: product launches, funding rounds, acquisitions, major updates, controversies, or technical breakthroughs."""
-            
+        elif post_type == "image":
+            # Generate Image Prompt and Tweet Text
+            script_prompt = f"Write a tweet caption for an image about '{topic}'. Also provide a visual prompt for an AI image generator (Imagen). Format: CAPTION: <text> | PROMPT: <visual description>"
             try:
-                news_info = self._generate_with_fallback(news_prompt)
-                logger.info(f"Found news: {news_info[:100]}...")
+                response = self._generate_with_fallback(script_prompt)
+                if "|" in response:
+                    parts = response.split("|")
+                    caption = parts[0].replace("CAPTION:", "").strip()
+                    visual_prompt = parts[1].replace("PROMPT:", "").strip()
+                else:
+                    caption = response[:100]
+                    visual_prompt = f"High quality tech photography of {topic}"
             except Exception as e:
-                logger.warning(f"News research failed: {e}")
-                news_info = f"Recent developments in {topic}"
+                logger.error(f"Failed to generate image script: {e}")
+                raise 
+                
+            strategy["content"] = caption
+            strategy["image_prompt"] = visual_prompt
             
-            # Step 2: Generate single authentic tweet based on real news
-            tweet_prompt = f"""You're a tech professional sharing news on Twitter/X. Write ONE tweet (not a thread).
-
-NEWS RESEARCH:
-{news_info}
-
-STYLE GUIDE (CRITICAL - this must sound human, not bot):
-✓ Write like you're texting a tech friend, not selling a product
-✓ Include: news + source + your brief take, all in one tweet
-✓ Conversational tone - use "I think", "Honestly", "Looks like"
-✓ Max 1-2 hashtags total
-✓ Only use emoji if it genuinely adds value (0-1 total)
-✓ NO marketing words: "game-changer", "revolutionary", "unlock", "dive deep"
-✓ NO excessive punctuation (!!!) or hype
-✓ Sound like actual insight, not a press release
-✓ Under 270 characters
-
-EXAMPLES (tone we want):
-
-"Anthropic just released Claude 3.5 Sonnet with updated training through April 2024. The artifact feature is clever - generates working apps you can iterate on. (via Anthropic)"
-
-"OpenAI's GPT-4 Turbo dropped to $0.01/1K tokens. Honestly huge for anyone building AI features - makes a lot more use cases viable now."
-
-"Vercel acquired v0.dev team. Makes sense given how much traction AI code gen is getting. Curious how they'll integrate it with their platform."
-
-Now write ONE tweet about: {topic}"""
+        else:
+            # Generate Hacker News Style Post with Grounding
+            logger.info(f"Generating HN-style post for: {topic}")
+            
+            post_prompt = f"""You are a tech influencer posting in the style of Hacker News / TechCrunch.
+            
+            Task: Write a single tweet about '{topic}' using Google Search to find the REAL link.
+            
+            Format:
+            <Headline>
+            <Link to actual source>
+            <1-2 sentence punchy insight/commentary>
+            
+            Requirements:
+            - Use Google Search to find the actual URL (blog post, GitHub repo, news article).
+            - Headline should be factual and crisp.
+            - Insight should be valuable to developers (why it matters).
+            - NO hashtags. NO emojis (unless critical).
+            - Total length under 280 chars.
+            
+            Example:
+            OpenAI releases GPT-4 Turbo with 128k context
+            https://openai.com/blog/new-models-and-developer-products
+            Finally usable for RAG without massive chunking strategies. The price drop is the real killer feature here.
+            """
             
             try:
-                response = self._generate_with_fallback(tweet_prompt)
+                # Use search tool to get the link and facts
+                response = self._generate_with_fallback(post_prompt, tools=[self.search_tool])
                 tweet = response.strip()
                 
-                if not tweet or len(tweet) < 20:
-                    # Create unique fallback using timestamp
-                    import random
-                    timestamp_str = datetime.datetime.now().strftime("%H%M")
-                    tweet = f"Interesting developments in {topic}. Worth keeping an eye on. #{timestamp_str}"
+                # Fallback if empty
+                if not tweet or len(tweet) < 10:
+                     tweet = f"{topic} - Interesting update. Check it out."
                 
-                # Return as single-item list for consistency with thread format
-                strategy["content"] = [tweet]
+                strategy["content"] = [tweet] # List format for consistency
             except Exception as e:
-                logger.error(f"Failed to generate tweet: {e}")
-                raise # Fail instead of using fallback
-
-
+                logger.error(f"Failed to generate HN post: {e}")
+                raise
 
         return strategy
 
@@ -286,7 +313,6 @@ Now write ONE tweet about: {topic}"""
             data["success"] = success
             if error:
                 data["error"] = error
-            # Ensure timestamp is set if it was missing (e.g. if strategy was created manually)
             if "timestamp" not in data:
                 data["timestamp"] = firestore.SERVER_TIMESTAMP
             doc_ref.set(data)
