@@ -1,13 +1,14 @@
 import logging
 import vertexai
 from google.cloud import aiplatform
-from google.cloud.aiplatform_v1beta1 import Tool as GapicTool
 from vertexai.generative_models import GenerativeModel, Tool
+from vertexai.preview.generative_models import grounding
 from vertexai.preview.vision_models import ImageGenerationModel
 from google.cloud import firestore
 from config import Config
 import datetime
 import os
+import re
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Configure logging
@@ -22,24 +23,23 @@ class AgentBrain:
         vertexai.init(project=self.project_id, location=self.location)
         
         # Initialize Google Search Grounding Tool
-        # Using GAPIC API workaround for Gemini 2.0+ compatibility
-        # See: https://github.com/googleapis/python-aiplatform/issues/4779
-        self.search_tool = Tool._from_gapic(
-            raw_tool=GapicTool(
-                google_search=GapicTool.GoogleSearch(),
-            ),
+        # NOTE: Gemini 2.0/2.5 models don't support google_search_retrieval yet (known SDK bug)
+        # Using Gemini 1.5 models for search-enabled queries
+        # See: https://github.com/GoogleCloudPlatform/generative-ai/issues/667
+        self.search_tool = Tool.from_google_search_retrieval(
+            google_search_retrieval=grounding.GoogleSearchRetrieval()
         )
-        
+
         # Multi-model configuration with dynamic discovery
-        # Query Vertex AI to find available Gemini models instead of hardcoding
+        # Prioritize Gemini 1.5 models for search compatibility
         candidate_models = [
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite", 
+            "gemini-1.5-pro",          # Best for search grounding
+            "gemini-1.5-flash",        # Fast, supports search
+            "gemini-2.5-flash",        # Newer but no search support yet
+            "gemini-2.5-flash-lite",
             "gemini-2.0-flash-001",
             "gemini-2.0-flash-lite-001",
             "gemini-2.5-pro",
-            "gemini-1.5-pro",
-            "gemini-1.5-flash",
         ]
         
         # Dynamic Discovery: Try to fetch models from GCP (e.g. tuned models)
@@ -91,33 +91,79 @@ class AgentBrain:
         self.db = firestore.Client(project=self.project_id)
         self.collection = self.db.collection(Config.COLLECTION_NAME)
 
-    def _generate_with_fallback(self, prompt: str, tools: list = None) -> str:
+    def _extract_urls(self, text: str) -> list:
+        """Extracts all URLs from text."""
+        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+        return re.findall(url_pattern, text)
+
+    def _validate_url(self, url: str) -> bool:
+        """Basic URL validation - checks if it's not obviously fake."""
+        if not url or len(url) < 10:
+            return False
+
+        # Check for common fake URL patterns
+        fake_patterns = [
+            'example.com',
+            'placeholder',
+            'yoursite.com',
+            'tempurl',
+            'fake',
+        ]
+
+        url_lower = url.lower()
+        for pattern in fake_patterns:
+            if pattern in url_lower:
+                return False
+
+        # Must have a valid TLD
+        if not re.search(r'\.(com|org|net|edu|gov|io|ai|dev|tech|co|info|blog)(/|$)', url_lower):
+            return False
+
+        return True
+
+    def _generate_with_fallback(self, prompt: str, tools: list = None, require_url: bool = False) -> str:
         """
         Attempts to generate content using available models with fallback.
         Tries each model in order until successful or all fail.
+
+        If require_url=True and tools are provided, validates that response contains real URLs.
         """
         last_error = None
-        
+
         for model_name in self.model_names:
             if model_name not in self.models:
                 continue
-                
+
             try:
                 model = self.models[model_name]
                 # Pass tools if provided (e.g. Grounding)
                 response = model.generate_content(prompt, tools=tools)
-                
+
                 if response.text:
-                    logger.info(f"✓ Generated content with {model_name}")
-                    return response.text.strip()
+                    text = response.text.strip()
+
+                    # If URL validation is required
+                    if require_url and tools:
+                        urls = self._extract_urls(text)
+                        valid_urls = [url for url in urls if self._validate_url(url)]
+
+                        if not valid_urls:
+                            logger.warning(f"✗ {model_name} generated content without valid URLs, trying next model")
+                            continue
+
+                        logger.info(f"✓ Generated content with {model_name} (found {len(valid_urls)} valid URLs)")
+                    else:
+                        logger.info(f"✓ Generated content with {model_name}")
+
+                    return text
                 else:
                     logger.warning(f"✗ {model_name} returned empty response")
-                    
+
             except Exception as e:
                 last_error = e
                 logger.warning(f"✗ {model_name} failed: {str(e)[:100]}")
                 continue
-        
+
         # All models failed
         raise RuntimeError(f"All models failed. Last error: {last_error}")
 
@@ -228,31 +274,36 @@ class AgentBrain:
 
         # Decide format
         if Config.BUDGET_MODE:
+            logger.info("BUDGET_MODE enabled, using text-only format")
             post_type = "text"
         else:
+            logger.info("BUDGET_MODE disabled, deciding optimal format for media generation")
             # Ask Gemini if this topic is better for video, image, or text
-            decision_prompt = f"""For the tech news '{topic}', what is the best format?
-            
-            Reply VIDEO if:
-            - It's a UI demo, animation, or dynamic visual
-            
-            Reply IMAGE if:
-            - It's a new device, logo, static diagram, or concept art
-            
-            Reply TEXT if:
-            - It's pure news, business update, or code/text heavy
-            
-            Reply ONLY with 'VIDEO', 'IMAGE', or 'TEXT'."""
-            
+            decision_prompt = f"""For the tech news '{topic}', what is the BEST visual format?
+
+Consider:
+- VIDEO: Product demos, UI animations, dynamic visualizations, tutorials
+- IMAGE: Product launches, devices, infographics, architecture diagrams, logos, concepts
+- TEXT: Pure text news, policy changes, financial updates, abstract concepts
+
+IMPORTANT: Prefer VIDEO or IMAGE when possible for engagement. Only choose TEXT if the topic is truly text-heavy or abstract.
+
+Reply with EXACTLY ONE WORD: VIDEO, IMAGE, or TEXT"""
+
             try:
                 decision = self._generate_with_fallback(decision_prompt).upper()
+                logger.info(f"Format decision response: {decision}")
+
                 if "VIDEO" in decision:
-                     post_type = "video"
+                    post_type = "video"
                 elif "IMAGE" in decision:
-                     post_type = "image"
+                    post_type = "image"
                 else:
-                     post_type = "text"
-            except Exception:
+                    post_type = "text"
+
+                logger.info(f"Selected post type: {post_type}")
+            except Exception as e:
+                logger.warning(f"Format decision failed: {e}, defaulting to text")
                 post_type = "text"
 
         strategy = {
@@ -302,36 +353,62 @@ class AgentBrain:
         else:
             # Generate Hacker News Style Post with Grounding
             logger.info(f"Generating HN-style post for: {topic}")
-            
-            post_prompt = f"""Write a tweet that will get engagement from developers about '{topic}'.
-            
-            Format:
-            <Bold claim or question>
-            <Link to actual source>
-            <Insight that makes people want to reply>
 
-            Requirements:
-            - Use Google Search to find the actual URL.
-            - The insight should be slightly controversial or invite discussion.
-            - Example: "Finally usable for RAG. But the real question: will this kill LangChain?"
-            - NO hashtags. NO emojis.
-            - Total length MUST be under 280 chars.
-            """
-            
+            post_prompt = f"""Search Google for recent news about '{topic}' and write an engaging developer-focused tweet.
+
+CRITICAL REQUIREMENTS:
+1. You MUST use Google Search to find a REAL, working URL about this topic
+2. The URL MUST be from an actual news site, blog, or official announcement
+3. Include the complete URL in your response (starting with https://)
+4. DO NOT make up or hallucinate URLs
+5. Write in this exact format:
+
+[Bold claim or question about the news]
+
+[REAL URL you found via search]
+
+[Provocative insight that invites discussion]
+
+CONSTRAINTS:
+- Total length: Under 280 characters
+- NO hashtags, NO emojis
+- If you cannot find a real URL, say "No URL found" instead of making one up
+"""
+
             try:
-                # Use search tool to get the link and facts
-                response = self._generate_with_fallback(post_prompt, tools=[self.search_tool])
+                # Use search tool with URL validation
+                response = self._generate_with_fallback(
+                    post_prompt,
+                    tools=[self.search_tool],
+                    require_url=True
+                )
                 tweet = response.strip()
-                
+
+                # Validate we got a real URL
+                urls = self._extract_urls(tweet)
+                valid_urls = [url for url in urls if self._validate_url(url)]
+
+                if not valid_urls:
+                    logger.error("No valid URL found in generated tweet, trying alternative approach")
+                    # Try one more time with simpler prompt
+                    simple_prompt = f"Use Google Search to find the official URL for '{topic}' and write a 280-char tweet with that URL."
+                    response = self._generate_with_fallback(
+                        simple_prompt,
+                        tools=[self.search_tool],
+                        require_url=True
+                    )
+                    tweet = response.strip()
+
                 # Strict length check
                 if len(tweet) > 280:
                     logger.warning(f"Tweet too long ({len(tweet)}), truncating.")
+                    # Try to truncate intelligently at sentence/word boundary
                     tweet = tweet[:277] + "..."
-                
-                # Fallback if empty
+
+                # Final validation
                 if not tweet or len(tweet) < 10:
-                     tweet = f"{topic} - Interesting update. Check it out."
-                
+                    tweet = f"{topic} - Check out this latest development in tech."
+
                 strategy["content"] = [tweet] # List format for consistency
             except Exception as e:
                 logger.error(f"Failed to generate HN post: {e}")
