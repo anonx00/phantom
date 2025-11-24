@@ -1,5 +1,6 @@
 import logging
 import vertexai
+from typing import List, Optional, Dict
 from google.cloud import aiplatform
 from vertexai.generative_models import GenerativeModel, Tool
 from vertexai.preview.generative_models import grounding
@@ -7,6 +8,7 @@ from vertexai.preview.vision_models import ImageGenerationModel
 from google.cloud import firestore
 from config import Config
 from news_fetcher import NewsFetcher
+from tone_validator import ToneValidator
 import datetime
 import os
 import re
@@ -105,6 +107,10 @@ class AgentBrain:
         # Initialize news fetcher for real URLs
         self.news_fetcher = NewsFetcher()
         logger.info("✓ News fetcher initialized (Hacker News API)")
+
+        # Initialize tone validator with dynamic pattern matching
+        self.tone_validator = ToneValidator()
+        logger.info("✓ Tone validator initialized with pattern-based validation")
 
     def _extract_urls(self, text: str) -> list:
         """Extracts all URLs from text."""
@@ -383,74 +389,13 @@ WHY: [impact/relevance to {target_audience}]
         # Build validation prompt with STRICT reality checks
         content_text = content[0] if isinstance(content, list) else content
 
-        # Pre-validation: Quick regex check for common formal/robotic phrases
-        formal_phrases = [
-            "feels like a big step",
-            "feels like a",
-            "seems like a",
-            "appears to be",
-            "could be a game changer",
-            "might be the",
-            "how will this impact",
-            "what does this mean for",
-            "this could revolutionize",
-            "towards bringing",
-            "in an effort to",
-            "looking forward to",
-            "excited to announce",
-            "we're pleased to",
-            "check out",
-            "read more",
-            "bringing more tech production",
-            "tech production stateside",
-            ", honestly",
-            "honestly.",
-            ", frankly",
-            "frankly.",
-            "to be honest",
-            "if i'm being honest",
-            ", really",
-            "really."
-        ]
-
-        # US-centric phrases to reject (bot is Australian, should be global)
-        us_centric_phrases = [
-            "home soil",
-            "came home",
-            "coming home",
-            "back home",
-            "on our soil",
-            "domestic tech",
-            "domestic production",
-            "here at home"
-        ]
-
-        content_lower = content_text.lower()
-
-        # Check for style labels leaking into content
-        if content_text.startswith("Style") or content_text.startswith("**Style") or "Style A:" in content_text or "Style B:" in content_text or "Style C:" in content_text:
-            logger.warning(f"Pre-validation REJECT: Style label leaked into content: {content_text}")
+        # Dynamic tone validation using pattern-based validator
+        is_valid_tone, tone_issue = self.tone_validator.validate(content_text)
+        if not is_valid_tone:
             return {
                 'valid': False,
-                'reason': "Style label leaked into tweet content. Must write tweet directly without labels."
+                'reason': tone_issue
             }
-
-        for phrase in formal_phrases:
-            if phrase in content_lower:
-                logger.warning(f"Pre-validation REJECT: Found formal phrase '{phrase}' in: {content_text}")
-                return {
-                    'valid': False,
-                    'reason': f"Too formal/robotic - contains phrase '{phrase}'. Need casual, punchy tone like 'About time.' or 'Finally.'"
-                }
-
-        # Check for US-centric language (bot is global/Australian)
-        for phrase in us_centric_phrases:
-            if phrase in content_lower:
-                logger.warning(f"Pre-validation REJECT: Found US-centric phrase '{phrase}' in: {content_text}")
-                return {
-                    'valid': False,
-                    'reason': f"US-centric language - contains '{phrase}'. Use global perspective (bot is Australian, not American)."
-                }
 
         validation_prompt = f"""You are a STRICT quality control AI. Your job is to REJECT fake, made-up, or misleading content.
 
@@ -481,29 +426,25 @@ CRITICAL VALIDATION - BE VERY STRICT:
    - Must be full sentences
    - Character count: {len(content_text)} (must be 20-280)
 
-4. ✓ Is tone CASUAL and HUMAN (not formal/robotic)?
-   - REJECT if it uses formal phrasing: "Feels like a big step", "towards bringing"
-   - REJECT if it has formal questions: "How will this impact", "What does this mean for"
-   - REJECT if wordy: "bringing more tech production stateside" vs "chip production came home"
-   - APPROVE punchy, direct style: "About time.", "Finally.", "This changes things."
-   - Sound like a real person tweeting, not a corporate account
+4. ✓ Is tone CASUAL and HUMAN (not formal/robotic/preachy)?
+   - REJECT preachy: "Good to see...", "Nice to see...", "Great to see..."
+   - REJECT meta-commentary: "wild to think about", "makes sense", "worth noting"
+   - REJECT filler endings: "honestly.", "frankly.", "finally.", "really."
+   - REJECT filler starts: "So,", "Well,", "Look,"
+   - REJECT hedging: "starting to", "seems like", "feels like"
+   - REJECT forced casual: "gotta", "wanna", "gonna" (unless natural)
+   - REJECT formal questions: "How will this impact", "What does this mean for"
+   - APPROVE punchy, direct: "About time.", "Progress.", "This matters."
+   - Sound like a real person, not observing from outside
 
-EXAMPLES OF WHAT TO REJECT:
-- "Unleash your creative vision with [product]" - Marketing language
-- "Feels like a big step towards..." - Too formal/wordy
-- "How will this impact the industry?" - Robotic question
-- "What does this mean for developers?" - Corporate tone
-- "This could revolutionize everything!" - Overhype
+EXAMPLES OF BAD TONE TO REJECT:
+{chr(10).join(self.tone_validator.get_bad_examples())}
+- "Unleash your creative vision" - Marketing language
+- "Check back later for updates!" - Placeholder text
 - Mentions products not in the original topic - Made up
-- "Check back later for video/updates!" - Placeholder text
-- Any "Pro" or version numbers not in topic - Fabricated
-- News posts without URLs when URL is available - Missing citation
 
-EXAMPLES OF WHAT TO APPROVE:
-- "OpenAI building AI factories in the US. About time chip production came home." - Casual, punchy
-- "GPT-5 cuts hallucinations by 40%. Finally getting somewhere with reliability." - Direct, human
-- "Copilot writes full functions now. Junior dev market about to get interesting." - Conversational
-- "[Real product] launches today. Will devs actually use it?" - Real, engaging (not formal)
+EXAMPLES OF GOOD TONE TO APPROVE:
+{chr(10).join(self.tone_validator.get_good_examples())}
 
 DECISION (BE STRICT - WHEN IN DOUBT, REJECT):
 Reply EXACTLY:
@@ -1069,19 +1010,10 @@ CONSTRAINTS:
 - Just write the tweet directly, nothing else
 
 GOOD Examples (SHORT, PUNCHY, CASUAL, GLOBAL):
-"OpenAI and Foxconn building AI factories in the US. About time America did this."
-"Gemini lets you tap images for instant definitions. Finally."
-"GPT-5 cuts hallucinations by 40%. Guess we're getting somewhere."
-"Rust adoption up 67% at Fortune 500. Memory safety wins."
+{chr(10).join([ex[2:] for ex in self.tone_validator.get_good_examples()])}
 
-BAD Examples (FORMAL/WORDY/US-CENTRIC - NEVER DO THIS):
-X "Good to see tech getting built on home soil" (US-centric, assumes US is home)
-X "About time chip production came home" (US-centric)
-X "Bringing tech production stateside" (US-centric)
-X "Feels like a big step towards..." (TOO WORDY)
-X "How will this impact domestic tech production?" (FORMAL QUESTION)
-X "What does this mean for the future of AI?" (ROBOTIC)
-X "This could revolutionize everything!" (OVERHYPE)
+BAD Examples (NEVER DO THIS):
+{chr(10).join(self.tone_validator.get_bad_examples())}
 
 Generate the tweet:
 """
