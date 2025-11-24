@@ -341,6 +341,18 @@ WHY: [impact/relevance to {target_audience}]
             "tech production stateside"
         ]
 
+        # US-centric phrases to reject (bot is Australian, should be global)
+        us_centric_phrases = [
+            "home soil",
+            "came home",
+            "coming home",
+            "back home",
+            "on our soil",
+            "domestic tech",
+            "domestic production",
+            "here at home"
+        ]
+
         content_lower = content_text.lower()
 
         # Check for style labels leaking into content
@@ -357,6 +369,15 @@ WHY: [impact/relevance to {target_audience}]
                 return {
                     'valid': False,
                     'reason': f"Too formal/robotic - contains phrase '{phrase}'. Need casual, punchy tone like 'About time.' or 'Finally.'"
+                }
+
+        # Check for US-centric language (bot is global/Australian)
+        for phrase in us_centric_phrases:
+            if phrase in content_lower:
+                logger.warning(f"Pre-validation REJECT: Found US-centric phrase '{phrase}' in: {content_text}")
+                return {
+                    'valid': False,
+                    'reason': f"US-centric language - contains '{phrase}'. Use global perspective (bot is Australian, not American)."
                 }
 
         validation_prompt = f"""You are a STRICT quality control AI. Your job is to REJECT fake, made-up, or misleading content.
@@ -869,21 +890,24 @@ CONSTRAINTS:
 - NO style labels ("Style A:", "**Style B:**", etc.)
 - NO formal questions like "How will this impact..." or "What does this mean for..."
 - NO "We" or "Check out" or "Read more"
+- NO US-centric language ("home soil", "came home", "stateside", "domestic")
+- Global perspective - don't assume US is "home"
 - Just write the tweet directly, nothing else
 
-GOOD Examples (SHORT, PUNCHY, CASUAL):
-"OpenAI and Foxconn building AI factories in the US. About time chip production came home."
+GOOD Examples (SHORT, PUNCHY, CASUAL, GLOBAL):
+"OpenAI and Foxconn building AI factories in the US. About time America did this."
 "Gemini lets you tap images for instant definitions. Finally."
 "GPT-5 cuts hallucinations by 40%. Guess we're getting somewhere."
 "Rust adoption up 67% at Fortune 500. Memory safety wins."
 
-BAD Examples (FORMAL/WORDY - NEVER DO THIS):
-X "Feels like a big step towards bringing more tech production stateside" (TOO WORDY)
+BAD Examples (FORMAL/WORDY/US-CENTRIC - NEVER DO THIS):
+X "Good to see tech getting built on home soil" (US-centric, assumes US is home)
+X "About time chip production came home" (US-centric)
+X "Bringing tech production stateside" (US-centric)
+X "Feels like a big step towards..." (TOO WORDY)
 X "How will this impact domestic tech production?" (FORMAL QUESTION)
 X "What does this mean for the future of AI?" (ROBOTIC)
 X "This could revolutionize everything!" (OVERHYPE)
-X "We're excited to see..." (CORPORATE)
-X "Looking forward to..." (BOT-LIKE)
 
 Generate the tweet:
 """
