@@ -122,13 +122,22 @@ class AgentBrain:
             # Check last 20 posts
             docs = self.collection.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(20).stream()
             
+            def _normalize(text):
+                return set(text.lower().split())
+            
+            current_words = _normalize(topic)
+            
             for doc in docs:
                 data = doc.to_dict()
-                stored_topic = data.get("topic", "").lower()
-                current_topic = topic.lower()
+                stored_topic = data.get("topic", "")
+                stored_words = _normalize(stored_topic)
                 
-                if stored_topic == current_topic or current_topic in stored_topic or stored_topic in current_topic:
-                    logger.info(f"Topic '{topic}' matches recent post '{stored_topic}'. Skipping.")
+                # Keyword overlap check (Jaccard similarity)
+                if not current_words: continue
+                overlap = len(stored_words & current_words) / len(current_words)
+                
+                if overlap > 0.6: # 60% overlap
+                    logger.info(f"Topic '{topic}' matches recent post '{stored_topic}' (Overlap: {overlap:.2f}). Skipping.")
                     return True
             return False
         except Exception as e:
@@ -137,12 +146,13 @@ class AgentBrain:
 
     def generate_image(self, prompt: str) -> str:
         """
-        Generates an image using Imagen 3 and saves it to a temp file.
+        Generates an image using Imagen 3 Fast and saves it to a temp file.
         Returns the path to the saved image.
         """
         logger.info(f"Generating image for: {prompt}")
         try:
-            model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+            # Switch to Fast model for speed
+            model = ImageGenerationModel.from_pretrained("imagen-3.0-fast-generate-001")
             images = model.generate_images(
                 prompt=prompt,
                 number_of_images=1,
@@ -181,12 +191,14 @@ class AgentBrain:
             try:
                 new_topic = self._generate_with_fallback(prompt, tools=[self.search_tool])
                 if self._check_history(new_topic):
-                     raise ValueError(f"Both '{topic}' and '{new_topic}' are duplicates.")
-                else:
-                     topic = new_topic
+                     # Try one more time with explicit instruction
+                     prompt2 = f"Both '{topic}' and '{new_topic}' are taken. Give me a completely random but interesting tech tool or library name."
+                     new_topic = self._generate_with_fallback(prompt2)
+                     
+                topic = new_topic
             except Exception as e:
                 logger.error(f"Failed to find alternative topic: {e}")
-                raise 
+                # Proceed with original topic if fallback fails, better than crashing
         
         logger.info(f"Selected Topic: {topic}")
 
@@ -267,32 +279,30 @@ class AgentBrain:
             # Generate Hacker News Style Post with Grounding
             logger.info(f"Generating HN-style post for: {topic}")
             
-            post_prompt = f"""You are a tech influencer posting in the style of Hacker News / TechCrunch.
-            
-            Task: Write a single tweet about '{topic}' using Google Search to find the REAL link.
+            post_prompt = f"""Write a tweet that will get engagement from developers about '{topic}'.
             
             Format:
-            <Headline>
+            <Bold claim or question>
             <Link to actual source>
-            <1-2 sentence punchy insight/commentary>
-            
+            <Insight that makes people want to reply>
+
             Requirements:
-            - Use Google Search to find the actual URL (blog post, GitHub repo, news article).
-            - Headline should be factual and crisp.
-            - Insight should be valuable to developers (why it matters).
-            - NO hashtags. NO emojis (unless critical).
-            - Total length under 280 chars.
-            
-            Example:
-            OpenAI releases GPT-4 Turbo with 128k context
-            https://openai.com/blog/new-models-and-developer-products
-            Finally usable for RAG without massive chunking strategies. The price drop is the real killer feature here.
+            - Use Google Search to find the actual URL.
+            - The insight should be slightly controversial or invite discussion.
+            - Example: "Finally usable for RAG. But the real question: will this kill LangChain?"
+            - NO hashtags. NO emojis.
+            - Total length MUST be under 280 chars.
             """
             
             try:
                 # Use search tool to get the link and facts
                 response = self._generate_with_fallback(post_prompt, tools=[self.search_tool])
                 tweet = response.strip()
+                
+                # Strict length check
+                if len(tweet) > 280:
+                    logger.warning(f"Tweet too long ({len(tweet)}), truncating.")
+                    tweet = tweet[:277] + "..."
                 
                 # Fallback if empty
                 if not tweet or len(tweet) < 10:

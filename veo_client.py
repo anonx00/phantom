@@ -43,76 +43,75 @@ class VeoClient:
         """
         print(f"Generating video for prompt: {prompt}")
         
+        # Update endpoint to generateVideo (LRO)
+        self.base_url = f"https://{self.region}-aiplatform.googleapis.com/v1beta1/projects/{self.project_id}/locations/{self.region}/publishers/google/models/veo-2.0-generate-001:generateVideo"
+        
         payload = {
-            "instances": [
-                {
-                    "prompt": prompt
-                }
-            ],
-            "parameters": {
-                "sampleCount": 1,
-                "videoLength": "6s",
-                "aspectRatio": "16:9"
-            }
+            "prompt": prompt,
+            "video_length": "6s",
+            "aspect_ratio": "16:9"
         }
 
         try:
-            # Add timeout (e.g., 10 minutes for generation, though predict is usually faster or returns LRO)
-            # Since we are using the predict endpoint, we assume it returns relatively quickly or we'd need LRO handling.
-            # Setting a generous timeout.
+            # Start LRO
             response = requests.post(
                 self.base_url,
                 headers=self._get_headers(),
                 json=payload,
-                timeout=600 
+                timeout=30
             )
             response.raise_for_status()
-            result = response.json()
+            lro_name = response.json()["name"]
+            print(f"Video generation started. Operation: {lro_name}")
             
-            predictions = result.get("predictions", [])
-            if not predictions:
-                raise ValueError(f"No predictions returned: {result}")
-            
-            # Create a temporary file
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
-                output_path = tmp_file.name
-
-            # Check for video content
-            video_bytes = None
-            
-            if "bytesBase64Encoded" in predictions[0]:
-                import base64
-                video_bytes = base64.b64decode(predictions[0]["bytesBase64Encoded"])
-                with open(output_path, "wb") as f:
-                    f.write(video_bytes)
-            elif "videoUri" in predictions[0]:
-                # Download from GCS
-                video_uri = predictions[0]["videoUri"]
-                print(f"Downloading video from {video_uri}...")
+            # Poll for completion
+            start_time = time.time()
+            while time.time() - start_time < 600: # 10 min timeout
+                time.sleep(10) # Poll every 10s
                 
-                # Use GCS client to download
-                from google.cloud import storage
-                storage_client = storage.Client(project=self.project_id)
+                poll_url = f"https://{self.region}-aiplatform.googleapis.com/v1beta1/{lro_name}"
+                poll_resp = requests.get(poll_url, headers=self._get_headers())
+                poll_resp.raise_for_status()
+                poll_data = poll_resp.json()
                 
-                # Parse GCS URI (gs://bucket/path)
-                if video_uri.startswith("gs://"):
-                    parts = video_uri[5:].split("/", 1)
-                    if len(parts) < 2:
-                         raise ValueError(f"Invalid GCS URI: {video_uri}")
-                    bucket_name = parts[0]
-                    blob_name = parts[1]
+                if "done" in poll_data and poll_data["done"]:
+                    if "error" in poll_data:
+                        raise RuntimeError(f"Video generation failed: {poll_data['error']}")
                     
-                    bucket = storage_client.bucket(bucket_name)
-                    blob = bucket.blob(blob_name)
-                    blob.download_to_filename(output_path)
-                else:
-                    raise ValueError(f"Unsupported video URI format: {video_uri}")
-            else:
-                raise ValueError(f"Could not find video data in response: {predictions[0]}")
+                    # Success! Get video URI
+                    # Response format: { "response": { "videoUri": "gs://..." } }
+                    video_uri = poll_data["response"].get("videoUri") or poll_data["response"].get("generatedSamples", [{}])[0].get("video", {}).get("uri")
+                    
+                    if not video_uri:
+                         # Try looking in metadata or other fields if structure varies
+                         print(f"Full response: {poll_data}")
+                         raise ValueError("Could not find videoUri in completed response")
+                         
+                    print(f"Video generated at: {video_uri}")
+                    
+                    # Download video
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
+                        output_path = tmp_file.name
+                        
+                    # Use GCS client to download
+                    from google.cloud import storage
+                    storage_client = storage.Client(project=self.project_id)
+                    
+                    if video_uri.startswith("gs://"):
+                        parts = video_uri[5:].split("/", 1)
+                        bucket_name = parts[0]
+                        blob_name = parts[1]
+                        
+                        bucket = storage_client.bucket(bucket_name)
+                        blob = bucket.blob(blob_name)
+                        blob.download_to_filename(output_path)
+                        print(f"Video saved to {output_path}")
+                        return output_path
+                    else:
+                        raise ValueError(f"Unsupported video URI format: {video_uri}")
             
-            print(f"Video saved to {output_path}")
-            return output_path
+            raise TimeoutError("Video generation timed out after 10 minutes")
 
         except requests.exceptions.RequestException as e:
             print(f"Veo API request failed: {e}")
