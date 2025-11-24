@@ -453,13 +453,18 @@ Reply with EXACTLY ONE WORD: VIDEO, IMAGE, or TEXT"""
 
         if post_type == "video":
             # Generate Video Prompt and Tweet Text
+            # Determine if this needs an explainer video or a hook video
             script_prompt = f"""Generate a tweet with video for THIS EXACT TOPIC: '{topic}'
 
 CRITICAL WARNING: You MUST write about THIS EXACT topic. DO NOT make up fake products or features!
 
+VIDEO TYPE DECISION:
+- If topic involves a process, algorithm, or how something works → EXPLAINER video
+- If topic is breaking news, announcement, or debate → HOOK video
+
 You MUST provide BOTH parts in this EXACT format:
 CAPTION: <your complete tweet text here>
-PROMPT: <your visual description here>
+PROMPT: <your detailed visual description here>
 
 CAPTION REQUIREMENTS:
 - Must reference the ACTUAL topic: '{topic}'
@@ -470,19 +475,38 @@ CAPTION REQUIREMENTS:
 - NO marketing language ("Unleash", "Revolutionary", etc.)
 - NO hashtags, NO emojis
 
-PROMPT REQUIREMENTS:
-- Visual description for video generator
-- Tech-focused, developer-oriented visuals
-- 50-100 characters
+PROMPT REQUIREMENTS FOR VIDEO (IMPORTANT - BE DETAILED):
+
+For EXPLAINER videos (processes, how-to, algorithms):
+- Describe a clear visual sequence showing the process step-by-step
+- Include diagrams, flowcharts, or code snippets being animated
+- Show before/after states or transformations
+- Example: "Animated flowchart showing data moving through neural network layers, with nodes lighting up sequentially as computation progresses, ending with output prediction appearing"
+
+For HOOK videos (news, announcements, debates):
+- Start with attention-grabbing visual (e.g., logo reveal, dramatic text)
+- Include relevant tech imagery (servers, code, interfaces, graphics)
+- Create visual intrigue that makes viewers want to learn more
+- Example: "Zoom into glowing AI chip with circuit patterns, transition to split-screen comparison of old vs new performance graphs, end on provocative question mark"
+
+PROMPT SHOULD BE:
+- 100-200 characters (detailed and specific)
+- Cinematically interesting
+- Technically relevant to the topic
+- Actually achievable by a video generator
 
 BAD Examples (NEVER DO THIS):
 X "Unleash creativity with Nano Banana Pro!"
 X "Check back later for the video!"
-X Any filler text about waiting
+X "Tech-focused, developer-oriented visuals" (too generic)
+X "Cool AI stuff" (not specific enough)
 
 GOOD Examples:
-OK "New AI model from Google. Can it replace developers?"
-OK "Latest chip promises 10x speedup. Will it deliver?"
+EXPLAINER: "New transformer architecture explained. How does it cut training time in half?"
+PROMPT: "Animated diagram of transformer architecture with attention heads lighting up, data flowing through layers, comparison chart showing 50% faster training time"
+
+HOOK: "OpenAI just dropped something big. Will it change everything?"
+PROMPT: "Dramatic zoom on OpenAI logo emerging from digital particles, cut to reaction shots of surprised developers at computers, end with pulsing question mark"
 
 CRITICAL: Write COMPLETE, STANDALONE caption. NO placeholder text!
 
@@ -504,6 +528,13 @@ Now generate for: '{topic}'
                         caption_part = f"{caption_part}. What's your take?"
 
                     caption = caption_part[:200]  # Enforce max length
+
+                    # Validate visual prompt is detailed enough
+                    if len(visual_prompt) < 50:
+                        logger.warning(f"Video prompt too short ({len(visual_prompt)} chars): {visual_prompt}")
+                        raise ValueError(f"Video prompt must be at least 50 characters, got {len(visual_prompt)}")
+
+                    logger.info(f"Video prompt: {visual_prompt[:100]}...")
                 else:
                     logger.error("Response missing CAPTION: or PROMPT: markers")
                     raise ValueError("Invalid format - missing CAPTION or PROMPT")
