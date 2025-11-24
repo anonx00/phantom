@@ -6,3 +6,4 @@ requests==2.31.0
 google-auth==2.27.0
 google-cloud-storage>=3.0.0
 tenacity==8.2.3
+feedparser==6.0.11
