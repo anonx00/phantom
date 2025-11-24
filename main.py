@@ -141,21 +141,23 @@ def main():
                     except Exception as cleanup_error:
                         logger.warning(f"Failed to cleanup video file: {cleanup_error}")
 
-        elif strategy["type"] == "image":
+        elif strategy["type"] in ["image", "meme"]:
             image_path = None
             try:
-                image_path = brain.generate_image(strategy["image_prompt"])
-                
+                # Both image and meme use generate_image() method
+                prompt_key = "meme_prompt" if strategy["type"] == "meme" else "image_prompt"
+                image_path = brain.generate_image(strategy[prompt_key])
+
                 # Upload Image
                 media = upload_media_v1(api_v1, image_path)
-                
-                # Post Tweet with Image
+
+                # Post Tweet with Image/Meme
                 post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
-                logger.info("Image posted successfully!")
+                logger.info(f"{strategy['type'].capitalize()} posted successfully!")
                 brain.log_post(strategy, success=True)
-                
+
             except Exception as e:
-                logger.error(f"Image generation or upload failed: {e}")
+                logger.error(f"{strategy['type'].capitalize()} generation or upload failed: {e}")
                 logger.info("Falling back to text with URL...")
 
                 # Fallback to text with URL
@@ -174,11 +176,11 @@ def main():
                         fallback_text = caption
 
                     post_tweet_v2(client_v2, text=fallback_text)
-                    logger.info("Posted text with URL after image failure")
-                    brain.log_post(strategy, success=True, error=f"Image failed but posted text with URL. Error: {e}")
+                    logger.info("Posted text with URL after media failure")
+                    brain.log_post(strategy, success=True, error=f"{strategy['type'].capitalize()} failed but posted text with URL. Error: {e}")
                 except Exception as fallback_error:
                     logger.error(f"Fallback tweet also failed: {fallback_error}")
-                    brain.log_post(strategy, success=False, error=f"Image and Fallback failed. Error: {e}")
+                    brain.log_post(strategy, success=False, error=f"{strategy['type'].capitalize()} and Fallback failed. Error: {e}")
                     sys.exit(1)
             finally:
                 if image_path and os.path.exists(image_path):
