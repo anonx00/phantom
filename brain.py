@@ -1,7 +1,8 @@
 import logging
 import vertexai
 from google.cloud import aiplatform
-from vertexai.generative_models import GenerativeModel, Tool, grounding
+from google.cloud.aiplatform_v1beta1 import Tool as GapicTool
+from vertexai.generative_models import GenerativeModel, Tool
 from vertexai.preview.vision_models import ImageGenerationModel
 from google.cloud import firestore
 from config import Config
@@ -21,8 +22,12 @@ class AgentBrain:
         vertexai.init(project=self.project_id, location=self.location)
         
         # Initialize Google Search Grounding Tool
-        self.search_tool = Tool.from_google_search_retrieval(
-            google_search_retrieval=grounding.GoogleSearchRetrieval()
+        # Using GAPIC API workaround for Gemini 2.0+ compatibility
+        # See: https://github.com/googleapis/python-aiplatform/issues/4779
+        self.search_tool = Tool._from_gapic(
+            raw_tool=GapicTool(
+                google_search=GapicTool.GoogleSearch(),
+            ),
         )
         
         # Multi-model configuration with dynamic discovery
