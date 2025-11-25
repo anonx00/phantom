@@ -9,24 +9,21 @@ logger = logging.getLogger(__name__)
 class NewsFetcher:
     """Fetches real tech news from various sources including AI, crypto, and finance."""
 
-    # Trusted domains - only accept stories from verified sources
-    TRUSTED_DOMAINS = [
-        # Major tech companies
-        'google.com', 'blog.google', 'openai.com', 'anthropic.com', 'microsoft.com',
-        'apple.com', 'meta.com', 'amazon.com', 'nvidia.com', 'github.com',
-        # Tech news
-        'techcrunch.com', 'theverge.com', 'arstechnica.com', 'wired.com',
-        'engadget.com', 'zdnet.com', 'cnet.com', 'tomshardware.com',
-        # Developer/Tech
-        'hackernews.com', 'ycombinator.com', 'dev.to', 'medium.com',
-        'stackoverflow.com', 'reddit.com', 'lobste.rs',
-        # AI/ML specific
-        'huggingface.co', 'arxiv.org', 'paperswithcode.com',
-        # Crypto/Finance
-        'coindesk.com', 'cointelegraph.com', 'bloomberg.com', 'reuters.com',
-        'cnbc.com', 'wsj.com', 'ft.com', 'yahoo.com',
-        # General news that covers tech
-        'bbc.com', 'nytimes.com', 'theguardian.com', 'forbes.com',
+    # Spam patterns in titles - lightweight check for obvious fake content
+    SPAM_TITLE_PATTERNS = [
+        'nano banana',        # Known fake product
+        'banana pro',         # Known fake product
+        'gemini 3 pro',       # Fake model (doesn't exist)
+        'gemini 4',           # Fake model
+        'gpt-6', 'gpt-7',     # Fake models
+        'claude 4', 'claude 5', # Fake models
+        'free trial',
+        'limited time offer',
+        'act now',
+        'click here',
+        'buy now',
+        '100% free',
+        'make money',
     ]
 
     def __init__(self):
@@ -52,41 +49,35 @@ class NewsFetcher:
             ]
         }
 
-    def _is_trusted_domain(self, url: str) -> bool:
-        """Check if URL is from a trusted domain."""
-        if not url:
-            return False
-        try:
-            from urllib.parse import urlparse
-            domain = urlparse(url).netloc.lower()
-            # Remove www. prefix
-            if domain.startswith('www.'):
-                domain = domain[4:]
+    def _has_spam_pattern(self, title: str) -> bool:
+        """Check if title contains spam patterns."""
+        if not title:
+            return True  # No title = suspicious
 
-            # Check against trusted domains
-            for trusted in self.TRUSTED_DOMAINS:
-                if domain == trusted or domain.endswith('.' + trusted):
-                    return True
-
-            logger.debug(f"Untrusted domain: {domain}")
-            return False
-        except Exception:
-            return False
+        title_lower = title.lower()
+        for pattern in self.SPAM_TITLE_PATTERNS:
+            if pattern in title_lower:
+                logger.debug(f"Spam pattern '{pattern}' found in: {title[:50]}...")
+                return True
+        return False
 
     def _is_valid_story(self, title: str, url: str) -> bool:
         """
-        Dynamic validation - checks if story is legitimate.
-        Uses domain verification + basic title sanity checks.
+        Lightweight validation - checks if story is legitimate.
+        Uses title pattern matching (not strict domain filtering).
         """
-        # Must have URL from trusted domain
-        if not self._is_trusted_domain(url):
-            logger.debug(f"Rejected untrusted: {url}")
+        # Must have a URL
+        if not url:
             return False
 
         # Title sanity checks
         if not title or len(title) < 10:
             return False
         if len(title) > 300:  # Suspiciously long
+            return False
+
+        # Check for spam patterns in title
+        if self._has_spam_pattern(title):
             return False
 
         return True
