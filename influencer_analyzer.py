@@ -24,30 +24,30 @@ class InfluencerAnalyzer:
     Uses Twitter search API to find high-engagement posts dynamically.
     """
 
-    # Search queries for each category (dynamic discovery, no hardcoded accounts)
+    # Search queries for each category (free tier compatible - no min_faves)
     CATEGORY_QUERIES = {
         'ai': [
-            'AI announcement min_faves:1000',
-            'GPT OR Claude OR Gemini min_faves:500 -is:retweet',
-            'machine learning breakthrough min_faves:300',
-            'LLM release min_faves:500',
+            'AI announcement -is:retweet lang:en',
+            'GPT OR Claude OR Gemini -is:retweet lang:en',
+            'machine learning -is:retweet lang:en',
+            'LLM release -is:retweet lang:en',
         ],
         'crypto': [
-            'Bitcoin OR Ethereum min_faves:1000 -is:retweet',
-            'crypto news min_faves:500',
-            'DeFi OR NFT announcement min_faves:300',
-            'blockchain update min_faves:500',
+            'Bitcoin OR Ethereum -is:retweet lang:en',
+            'crypto news -is:retweet lang:en',
+            'DeFi OR NFT -is:retweet lang:en',
+            'blockchain -is:retweet lang:en',
         ],
         'tech': [
-            'tech startup funding min_faves:500',
-            'silicon valley news min_faves:300',
-            'developer tools launch min_faves:300',
-            'open source release min_faves:500',
+            'tech startup -is:retweet lang:en',
+            'silicon valley -is:retweet lang:en',
+            'developer tools -is:retweet lang:en',
+            'open source -is:retweet lang:en',
         ],
         'finance': [
-            'stock market min_faves:500 -is:retweet',
-            'Fed OR inflation news min_faves:300',
-            'fintech announcement min_faves:300',
+            'stock market -is:retweet lang:en',
+            'Fed OR inflation -is:retweet lang:en',
+            'fintech -is:retweet lang:en',
         ]
     }
 
@@ -109,7 +109,10 @@ class InfluencerAnalyzer:
         """
         Fetches high-engagement posts for a category using search.
         Returns list of posts with engagement metrics.
+        Free tier: limited queries to avoid rate limits.
         """
+        import time
+
         if not self.client:
             logger.warning("Twitter client not available")
             return []
@@ -117,12 +120,15 @@ class InfluencerAnalyzer:
         queries = self.CATEGORY_QUERIES.get(category, self.CATEGORY_QUERIES['tech'])
         all_posts = []
 
-        for query in queries:
+        # Free tier: only use first query to avoid rate limits
+        queries_to_use = queries[:1]
+
+        for query in queries_to_use:
             try:
-                # Search recent tweets with high engagement
+                # Search recent tweets
                 tweets = self.client.search_recent_tweets(
                     query=query,
-                    max_results=20,
+                    max_results=10,  # Reduced for free tier
                     tweet_fields=['created_at', 'public_metrics', 'author_id', 'lang'],
                     user_fields=['name', 'username', 'location', 'description', 'public_metrics'],
                     expansions=['author_id']
