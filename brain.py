@@ -43,6 +43,13 @@ except ImportError:
     MIXER_AVAILABLE = False
     ContentMixer = None
 
+try:
+    from influencer_analyzer import InfluencerAnalyzer
+    INFLUENCER_AVAILABLE = True
+except ImportError:
+    INFLUENCER_AVAILABLE = False
+    InfluencerAnalyzer = None
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -57,12 +64,14 @@ class AgentBrain:
 
         self.model_names = []
         self.models = {}
+        self._current_ai_eval = {}  # Stores AI evaluation for content styling
 
         # Dynamic model discovery from Vertex AI
         candidate_models = self._discover_available_models()
 
         if not candidate_models:
-            raise RuntimeError("No Gemini models discovered. Check Vertex AI API access.")
+            logger.critical("No Gemini models discovered! This is fatal.")
+            raise RuntimeError("No Gemini models discovered. Check Vertex AI API access and ensure models are enabled.")
 
         logger.info(f"✓ Active models ({len(self.models)}): {self.model_names}")
 
@@ -136,113 +145,85 @@ class AgentBrain:
             except Exception as e:
                 logger.warning(f"Content mixer not available: {e}")
 
+        # Initialize influencer analyzer for trend analysis
+        self.influencer_analyzer = None
+        if INFLUENCER_AVAILABLE:
+            try:
+                self.influencer_analyzer = InfluencerAnalyzer()
+                logger.info("✓ Influencer analyzer initialized for trend tracking")
+            except Exception as e:
+                logger.warning(f"Influencer analyzer not available: {e}")
+
     def _discover_available_models(self) -> list:
         """
         Dynamically discovers available Gemini models from Vertex AI.
-        Uses API probing - no hardcoded model lists.
+        Uses SDK instantiation to test which models work.
         Returns list of working model names.
         """
-        import requests
-        from google.auth import default
-        from google.auth.transport.requests import Request
-
         discovered_models = []
 
         logger.info("Discovering available Gemini models from Vertex AI...")
 
-        try:
-            # Get credentials for API call
-            credentials, project = default()
-            credentials.refresh(Request())
-            access_token = credentials.token
+        # Generate candidate model names dynamically based on naming conventions
+        def generate_model_candidates():
+            """Generate model names based on Vertex AI patterns."""
+            candidates = []
 
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
-            }
+            # Version patterns (ordered by preference - newest first)
+            versions = ["2.5", "2.0", "1.5"]
 
-            # Dynamic model name generation based on Vertex AI naming patterns
-            # Format: gemini-{major}.{minor}-{variant}-{release}
-            def generate_model_candidates():
-                """Generate possible model names dynamically based on naming conventions."""
-                candidates = []
+            # Variant patterns (flash preferred for cost/speed)
+            variants = ["flash", "pro"]
 
-                # Version patterns (major.minor combinations)
-                versions = ["2.5", "2.0", "1.5", "1.0"]
+            # Release patterns
+            releases = ["001", "002", "exp"]
 
-                # Variant patterns
-                variants = ["flash", "pro"]
+            for version in versions:
+                for variant in variants:
+                    for release in releases:
+                        candidates.append(f"gemini-{version}-{variant}-{release}")
 
-                # Release patterns
-                releases = ["001", "002", "exp", "latest"]
+            # Add experimental date-based models
+            import datetime
+            today = datetime.datetime.now()
+            for days_back in [0, 7, 14, 30]:  # Recent experiments only
+                date = today - datetime.timedelta(days=days_back)
+                candidates.append(f"gemini-exp-{date.strftime('%m%d')}")
 
-                for version in versions:
-                    for variant in variants:
-                        for release in releases:
-                            candidates.append(f"gemini-{version}-{variant}-{release}")
+            return candidates
 
-                # Add experimental format (gemini-exp-MMDD)
-                import datetime
-                today = datetime.datetime.now()
-                for days_back in range(0, 90, 7):  # Check last ~3 months
-                    date = today - datetime.timedelta(days=days_back)
-                    candidates.append(f"gemini-exp-{date.strftime('%m%d')}")
+        candidates = generate_model_candidates()
+        logger.info(f"Testing {len(candidates)} candidate model patterns via SDK...")
 
-                return candidates
+        # Test each candidate via SDK - stop after finding enough working models
+        MAX_WORKING_MODELS = 3  # Don't need more than 3 working models
+        tested = 0
 
-            # Probe each candidate model via API
-            candidates = generate_model_candidates()
-            logger.info(f"Probing {len(candidates)} candidate model patterns...")
+        for model_name in candidates:
+            if len(discovered_models) >= MAX_WORKING_MODELS:
+                logger.info(f"Found {MAX_WORKING_MODELS} working models, stopping search")
+                break
 
-            for model_name in candidates:
-                try:
-                    # Quick API probe - check if model exists
-                    check_url = f"https://{self.location}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}/publishers/google/models/{model_name}"
-                    response = requests.get(check_url, headers=headers, timeout=5)
-
-                    if response.status_code == 200:
-                        discovered_models.append(model_name)
-                        logger.info(f"  ✓ Found: {model_name}")
-                    # Skip logging 404s to reduce noise
-                except requests.exceptions.Timeout:
-                    continue
-                except Exception:
-                    continue
-
-            logger.info(f"Discovered {len(discovered_models)} available Gemini models")
-
-        except Exception as e:
-            logger.warning(f"Model discovery failed: {e}")
-
-        # Fallback: if nothing found, try basic instantiation
-        if not discovered_models:
-            logger.warning("API discovery found no models, trying SDK instantiation...")
-            # Try common patterns via SDK (will fail fast if not available)
-            fallback_patterns = [
-                f"gemini-2.0-flash-001",
-                f"gemini-1.5-flash-002",
-            ]
-            for pattern in fallback_patterns:
-                try:
-                    model = GenerativeModel(pattern)
-                    # Quick validation - generate minimal content
-                    test_response = model.generate_content("OK")
-                    if test_response.text:
-                        discovered_models.append(pattern)
-                        logger.info(f"  ✓ SDK fallback found: {pattern}")
-                except Exception:
-                    continue
-
-        # Add discovered models (lazy - no token-wasting validation)
-        working_models = []
-        for model_name in discovered_models:
             try:
                 model = GenerativeModel(model_name)
-                self.models[model_name] = model
-                self.model_names.append(model_name)
-                working_models.append(model_name)
+                # Quick test - minimal token usage
+                test_response = model.generate_content("1")
+                if test_response.text:
+                    discovered_models.append(model_name)
+                    self.models[model_name] = model
+                    self.model_names.append(model_name)
+                    logger.info(f"  ✓ {model_name} - working")
+                    tested += 1
             except Exception as e:
-                logger.debug(f"  ✗ Could not instantiate {model_name}: {e}")
+                error_str = str(e).lower()
+                if "404" in error_str or "not found" in error_str:
+                    # Model doesn't exist - skip silently
+                    pass
+                else:
+                    logger.debug(f"  ✗ {model_name}: {str(e)[:50]}")
+
+        if not discovered_models:
+            logger.error("No Gemini models found! Check Vertex AI configuration.")
 
         # Sort by preference (flash first for cost/speed)
         def model_priority(name):
@@ -255,9 +236,9 @@ class AgentBrain:
             return 6
 
         self.model_names.sort(key=model_priority)
-        logger.info(f"Model priority order: {self.model_names}")
+        logger.info(f"✓ Active models ({len(discovered_models)}): {self.model_names}")
 
-        return working_models
+        return discovered_models
 
     def _get_daily_media_usage(self) -> dict:
         """
@@ -831,10 +812,96 @@ Does it relate to actual topic "{topic}"? Are all claims real?
             images[0].save(location=output_path, include_generation_parameters=False)
             logger.info(f"Image saved to {output_path}")
             return output_path
-            
+
         except Exception as e:
             logger.error(f"Imagen generation failed: {e}")
             raise
+
+    def _get_trending_insights(self, category: str = 'ai') -> dict:
+        """
+        Gets trending insights from influencer analysis.
+        Returns style recommendations and trending topics.
+        """
+        if not self.influencer_analyzer:
+            return {'has_data': False}
+
+        try:
+            insights = self.influencer_analyzer.get_content_recommendations(category)
+            if insights.get('has_data'):
+                logger.info(f"Got trending insights for {category}: {insights.get('trending_topics', [])[:5]}")
+            return insights
+        except Exception as e:
+            logger.warning(f"Could not get trending insights: {e}")
+            return {'has_data': False}
+
+    def _ai_evaluate_content(self, topic: str, story_context: str, trending_insights: dict) -> dict:
+        """
+        Uses AI to evaluate if content is worth posting based on trending analysis.
+        Returns decision and style recommendations.
+        """
+        if not self.models:
+            return {'should_post': True, 'reason': 'No AI available for evaluation'}
+
+        model = self.models.get(self.model_names[0])
+        if not model:
+            return {'should_post': True, 'reason': 'No model available'}
+
+        # Build context from trending insights
+        trending_context = ""
+        if trending_insights.get('has_data'):
+            trending_topics = trending_insights.get('trending_topics', [])
+            style = trending_insights.get('style_insights', {})
+            top_post = trending_insights.get('top_post', {})
+
+            trending_context = f"""
+CURRENT TRENDING ANALYSIS:
+- Hot topics on Twitter: {', '.join(trending_topics[:10]) if trending_topics else 'N/A'}
+- Top performing post style: ~{style.get('avg_length', 150)} chars, {'uses emojis' if style.get('emoji_usage', 0) > 0.3 else 'minimal emojis'}
+- Hashtag usage: {'common' if style.get('hashtag_usage', 0) > 0.3 else 'rare'}
+- Example high-engagement post: "{top_post.get('text', 'N/A')[:100]}..." ({top_post.get('engagement', 0)} engagement)
+"""
+
+        evaluation_prompt = f"""You are a social media strategist. Evaluate if this content is worth posting.
+
+PROPOSED CONTENT:
+Topic: {topic}
+Context: {story_context[:500]}
+
+{trending_context}
+
+EVALUATE:
+1. Is this topic timely and relevant? (trending or newsworthy)
+2. Does it align with what's getting engagement on Twitter?
+3. Would it interest tech/AI/crypto audience?
+
+Respond in this exact format:
+DECISION: POST or SKIP
+CONFIDENCE: HIGH/MEDIUM/LOW
+REASON: <one line reason>
+STYLE_TIP: <one line style recommendation based on trending analysis>
+SUGGESTED_HASHTAGS: <2-3 relevant hashtags or "none">
+"""
+
+        try:
+            response = model.generate_content(evaluation_prompt)
+            result_text = response.text.strip()
+
+            # Parse response
+            decision = 'POST' in result_text.upper().split('DECISION:')[1].split('\n')[0] if 'DECISION:' in result_text else True
+            reason = result_text.split('REASON:')[1].split('\n')[0].strip() if 'REASON:' in result_text else 'AI evaluation'
+            style_tip = result_text.split('STYLE_TIP:')[1].split('\n')[0].strip() if 'STYLE_TIP:' in result_text else ''
+            hashtags = result_text.split('SUGGESTED_HASHTAGS:')[1].split('\n')[0].strip() if 'SUGGESTED_HASHTAGS:' in result_text else ''
+
+            return {
+                'should_post': decision,
+                'reason': reason,
+                'style_tip': style_tip,
+                'hashtags': hashtags if hashtags.lower() != 'none' else '',
+                'trending_topics': trending_insights.get('trending_topics', [])
+            }
+        except Exception as e:
+            logger.warning(f"AI evaluation failed: {e}")
+            return {'should_post': True, 'reason': f'Evaluation failed: {e}'}
 
     def get_strategy(self):
         """
@@ -859,15 +926,42 @@ Does it relate to actual topic "{topic}"? Are all claims real?
     def _generate_strategy_with_validation(self, attempt: int = 0) -> dict:
         """
         Internal method to generate and validate a strategy.
-        Separated for retry logic.
+        Separated for retry logic. Uses AI to evaluate content based on trending analysis.
         """
         # Get preferred categories based on recent post history (variety + balance)
         preferred_categories = self._get_preferred_categories()
+        primary_category = preferred_categories[0] if preferred_categories else 'ai'
+
+        # Fetch trending insights from top influencers
+        trending_insights = self._get_trending_insights(primary_category)
+        if trending_insights.get('has_data'):
+            logger.info(f"Using trending insights: {trending_insights.get('recommendation', 'N/A')}")
 
         story = self._get_trending_story(preferred_categories=preferred_categories)
         topic = story['title']
         story_url = story.get('url')  # Real URL or None
         story_context = story.get('context', f"Article: {topic}")  # Rich context from article
+
+        # AI-based content evaluation
+        ai_eval = self._ai_evaluate_content(topic, story_context, trending_insights)
+        if not ai_eval.get('should_post', True):
+            logger.info(f"AI recommends SKIP: {ai_eval.get('reason', 'No reason')}")
+            # Try to find better content
+            for retry in range(3):
+                story = self._get_trending_story(preferred_categories=preferred_categories)
+                topic = story['title']
+                story_url = story.get('url')
+                story_context = story.get('context', f"Article: {topic}")
+                ai_eval = self._ai_evaluate_content(topic, story_context, trending_insights)
+                if ai_eval.get('should_post', True):
+                    logger.info(f"AI approved alternate content: {ai_eval.get('reason', 'N/A')}")
+                    break
+            else:
+                logger.warning("AI rejected all alternatives, proceeding anyway")
+
+        # Store AI recommendations for content generation
+        self._current_ai_eval = ai_eval
+        logger.info(f"AI style tip: {ai_eval.get('style_tip', 'N/A')}")
 
         # Retry logic for duplicates (check both topic AND URL)
         if self._check_history(topic, story_url):

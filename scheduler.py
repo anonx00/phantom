@@ -28,7 +28,7 @@ class HumanScheduler:
             'lunch': {'start': 12, 'end': 14, 'weight': 2},       # 12-2pm: Lunch break posting
             'afternoon': {'start': 14, 'end': 17, 'weight': 3},   # 2-5pm: Afternoon productivity
             'evening': {'start': 18, 'end': 21, 'weight': 4},     # 6-9pm: Peak social media
-            'night': {'start': 21, 'end': 23, 'weight': 2},       # 9-11pm: Late scrolling
+            'night': {'start': 21, 'end': 24, 'weight': 2},       # 9pm-midnight: Late scrolling
         }
 
         # Days with different posting patterns
