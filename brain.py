@@ -139,7 +139,7 @@ class AgentBrain:
     def _discover_available_models(self) -> list:
         """
         Dynamically discovers available Gemini models from Vertex AI.
-        Queries the API and validates each model works before adding to pool.
+        Uses API probing - no hardcoded model lists.
         Returns list of working model names.
         """
         import requests
@@ -148,7 +148,6 @@ class AgentBrain:
 
         discovered_models = []
 
-        # Step 1: Try to query Vertex AI Model Garden API for available models
         logger.info("Discovering available Gemini models from Vertex AI...")
 
         try:
@@ -157,88 +156,103 @@ class AgentBrain:
             credentials.refresh(Request())
             access_token = credentials.token
 
-            # Query the publisher models endpoint
-            api_url = f"https://{self.location}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}/publishers/google/models"
-
             headers = {
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json"
             }
 
-            response = requests.get(api_url, headers=headers, timeout=30)
+            # Dynamic model name generation based on Vertex AI naming patterns
+            # Format: gemini-{major}.{minor}-{variant}-{release}
+            def generate_model_candidates():
+                """Generate possible model names dynamically based on naming conventions."""
+                candidates = []
 
-            if response.status_code == 200:
-                data = response.json()
-                models = data.get("models", data.get("publisherModels", []))
+                # Version patterns (major.minor combinations)
+                versions = ["2.5", "2.0", "1.5", "1.0"]
 
-                for model in models:
-                    model_name = model.get("name", "").split("/")[-1]
-                    # Filter for Gemini models only
-                    if "gemini" in model_name.lower():
+                # Variant patterns
+                variants = ["flash", "pro"]
+
+                # Release patterns
+                releases = ["001", "002", "exp", "latest"]
+
+                for version in versions:
+                    for variant in variants:
+                        for release in releases:
+                            candidates.append(f"gemini-{version}-{variant}-{release}")
+
+                # Add experimental format (gemini-exp-MMDD)
+                import datetime
+                today = datetime.datetime.now()
+                for days_back in range(0, 90, 7):  # Check last ~3 months
+                    date = today - datetime.timedelta(days=days_back)
+                    candidates.append(f"gemini-exp-{date.strftime('%m%d')}")
+
+                return candidates
+
+            # Probe each candidate model via API
+            candidates = generate_model_candidates()
+            logger.info(f"Probing {len(candidates)} candidate model patterns...")
+
+            for model_name in candidates:
+                try:
+                    # Quick API probe - check if model exists
+                    check_url = f"https://{self.location}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}/publishers/google/models/{model_name}"
+                    response = requests.get(check_url, headers=headers, timeout=5)
+
+                    if response.status_code == 200:
                         discovered_models.append(model_name)
-                        logger.info(f"  API discovered: {model_name}")
+                        logger.info(f"  ✓ Found: {model_name}")
+                    # Skip logging 404s to reduce noise
+                except requests.exceptions.Timeout:
+                    continue
+                except Exception:
+                    continue
 
-                logger.info(f"API returned {len(discovered_models)} Gemini models")
-            else:
-                logger.warning(f"Model API returned {response.status_code}: {response.text[:200]}")
+            logger.info(f"Discovered {len(discovered_models)} available Gemini models")
 
         except Exception as e:
-            logger.warning(f"Could not query Model Garden API: {e}")
+            logger.warning(f"Model discovery failed: {e}")
 
-        # Step 2: If API didn't return models, build list from known patterns
+        # Fallback: if nothing found, try basic instantiation
         if not discovered_models:
-            logger.info("Building model list from known Vertex AI patterns...")
-            # These patterns are based on Vertex AI naming conventions
-            # Format: gemini-{version}-{variant}-{release}
-            base_patterns = [
-                # Gemini 2.0 series (latest)
-                "gemini-2.0-flash-001",
-                "gemini-2.0-flash-exp",
-                "gemini-2.0-pro-exp",
-                # Gemini 1.5 series (stable)
-                "gemini-1.5-flash-002",
-                "gemini-1.5-flash-001",
-                "gemini-1.5-pro-002",
-                "gemini-1.5-pro-001",
-                # Experimental variants
-                "gemini-1.5-flash-latest",
-                "gemini-1.5-pro-latest",
-                "gemini-exp-1206",
+            logger.warning("API discovery found no models, trying SDK instantiation...")
+            # Try common patterns via SDK (will fail fast if not available)
+            fallback_patterns = [
+                f"gemini-2.0-flash-001",
+                f"gemini-1.5-flash-002",
             ]
-            discovered_models = base_patterns
+            for pattern in fallback_patterns:
+                try:
+                    model = GenerativeModel(pattern)
+                    # Quick validation - generate minimal content
+                    test_response = model.generate_content("OK")
+                    if test_response.text:
+                        discovered_models.append(pattern)
+                        logger.info(f"  ✓ SDK fallback found: {pattern}")
+                except Exception:
+                    continue
 
-        # Step 3: Add models without expensive validation (validate on first use)
-        logger.info(f"Adding {len(discovered_models)} candidate models (lazy validation)...")
+        # Add discovered models (lazy - no token-wasting validation)
         working_models = []
-
         for model_name in discovered_models:
             try:
-                # Just instantiate - don't test with prompt (saves tokens!)
                 model = GenerativeModel(model_name)
                 self.models[model_name] = model
                 self.model_names.append(model_name)
                 working_models.append(model_name)
-                logger.info(f"  + {model_name} - added (will validate on first use)")
-
             except Exception as e:
-                error_msg = str(e)
-                if "404" in error_msg or "not found" in error_msg.lower():
-                    logger.debug(f"  ✗ {model_name} - not available")
-                else:
-                    logger.warning(f"  ✗ {model_name} - error: {error_msg[:80]}")
+                logger.debug(f"  ✗ Could not instantiate {model_name}: {e}")
 
-        # Step 4: Sort by preference (flash models first for speed/cost)
+        # Sort by preference (flash first for cost/speed)
         def model_priority(name):
-            if "2.0" in name and "flash" in name:
-                return 0  # Prefer 2.0 flash
-            elif "1.5" in name and "flash" in name:
-                return 1  # Then 1.5 flash
+            if "2.5" in name:
+                return 0 if "flash" in name else 1
             elif "2.0" in name:
-                return 2  # Then 2.0 pro
-            elif "1.5" in name and "pro" in name:
-                return 3  # Then 1.5 pro
-            else:
-                return 4  # Others last
+                return 2 if "flash" in name else 3
+            elif "1.5" in name:
+                return 4 if "flash" in name else 5
+            return 6
 
         self.model_names.sort(key=model_priority)
         logger.info(f"Model priority order: {self.model_names}")

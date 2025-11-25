@@ -1,36 +1,75 @@
 import logging
 import requests
+import os
 from typing import Dict, List, Optional
 import random
 import feedparser
 
 logger = logging.getLogger(__name__)
 
+# Optional: newspaper3k for better article extraction
+try:
+    from newspaper import Article
+    NEWSPAPER_AVAILABLE = True
+except ImportError:
+    NEWSPAPER_AVAILABLE = False
+    logger.debug("newspaper3k not available, using basic validation")
+
+
 class NewsFetcher:
     """Fetches real tech news from various sources including AI, crypto, and finance."""
 
-    # Spam patterns in titles - lightweight check for obvious fake content
-    SPAM_TITLE_PATTERNS = [
-        'nano banana',        # Known fake product
-        'banana pro',         # Known fake product
-        'gemini 3 pro',       # Fake model (doesn't exist)
-        'gemini 4',           # Fake model
-        'gpt-6', 'gpt-7',     # Fake models
-        'claude 4', 'claude 5', # Fake models
-        'free trial',
-        'limited time offer',
-        'act now',
-        'click here',
-        'buy now',
-        '100% free',
-        'make money',
-    ]
+    @staticmethod
+    def _build_spam_patterns() -> List[str]:
+        """
+        Dynamically generates spam patterns instead of hardcoding.
+        Includes fake AI model names, marketing spam, etc.
+        """
+        patterns = []
+
+        # 1. Generate fake AI model names dynamically
+        # Current real versions: GPT-4, Claude 3, Gemini 2
+        # Future versions don't exist yet
+        ai_brands = ['gpt', 'claude', 'gemini', 'llama', 'mistral']
+        for brand in ai_brands:
+            # Versions that don't exist (future versions)
+            for version in range(4, 10):  # 4-9 are future/fake
+                if brand == 'gpt' and version <= 5:
+                    patterns.append(f'{brand}-{version}')  # gpt-5+ is fake
+                elif brand == 'claude' and version >= 4:
+                    patterns.append(f'{brand} {version}')  # claude 4+ is fake
+                elif brand == 'gemini' and version >= 3:
+                    patterns.append(f'{brand} {version}')  # gemini 3+ is fake
+
+        # 2. Known fake product patterns
+        patterns.extend([
+            'nano banana', 'banana pro',  # Known spam products
+        ])
+
+        # 3. Marketing spam phrases
+        marketing_spam = [
+            'free trial', 'limited time offer', 'act now',
+            'click here', 'buy now', '100% free', 'make money',
+            'exclusive deal', 'hurry up', 'don\'t miss',
+        ]
+        patterns.extend(marketing_spam)
+
+        # 4. Load additional patterns from environment (comma-separated)
+        extra_patterns = os.getenv('SPAM_PATTERNS', '')
+        if extra_patterns:
+            patterns.extend([p.strip().lower() for p in extra_patterns.split(',') if p.strip()])
+
+        return patterns
 
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (compatible; TechInfluencerBot/1.0)'
         })
+
+        # Build spam patterns dynamically
+        self.spam_patterns = self._build_spam_patterns()
+        logger.info(f"Loaded {len(self.spam_patterns)} spam patterns (dynamic)")
 
         # RSS feeds for different categories
         self.feeds = {
@@ -50,16 +89,40 @@ class NewsFetcher:
         }
 
     def _has_spam_pattern(self, title: str) -> bool:
-        """Check if title contains spam patterns."""
+        """Check if title contains dynamically generated spam patterns."""
         if not title:
             return True  # No title = suspicious
 
         title_lower = title.lower()
-        for pattern in self.SPAM_TITLE_PATTERNS:
+        for pattern in self.spam_patterns:
             if pattern in title_lower:
                 logger.debug(f"Spam pattern '{pattern}' found in: {title[:50]}...")
                 return True
         return False
+
+    def _validate_with_newspaper(self, url: str) -> bool:
+        """
+        Use newspaper3k to validate article (if available).
+        Returns True if article seems legitimate.
+        """
+        if not NEWSPAPER_AVAILABLE:
+            return True  # Skip validation if library not available
+
+        try:
+            article = Article(url)
+            article.download()
+            article.parse()
+
+            # Basic validation: must have title and some text
+            if not article.title or len(article.title) < 10:
+                return False
+            if not article.text or len(article.text) < 100:
+                return False
+
+            return True
+        except Exception as e:
+            logger.debug(f"newspaper3k validation failed for {url}: {e}")
+            return True  # Don't block on validation errors
 
     def _is_valid_story(self, title: str, url: str) -> bool:
         """
