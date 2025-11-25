@@ -9,6 +9,12 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 class VeoClient:
+    # Veo model variants to try (in order of preference)
+    VEO_MODELS = [
+        "veo-2.0-generate-001",   # Veo 2 - primary
+        "veo-001",                 # Veo 1 fallback
+    ]
+
     def __init__(self, project_id: str, region: str):
         if not project_id:
             raise ValueError("project_id is required for VeoClient")
@@ -17,13 +23,40 @@ class VeoClient:
 
         self.project_id = project_id
         self.region = region
-        # Base URL is set dynamically in generate_video based on the specific model version needed
+        self.available_model = None
 
         try:
             self.credentials, _ = google.auth.default()
             logger.info(f"VeoClient initialized for project {project_id} in region {region}")
         except Exception as e:
             raise RuntimeError(f"Failed to get default credentials: {e}")
+
+    def _check_model_available(self, model_name: str) -> bool:
+        """Check if a Veo model is available by querying the API."""
+        try:
+            check_url = f"https://{self.region}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.region}/publishers/google/models/{model_name}"
+            response = requests.get(check_url, headers=self._get_headers(), timeout=10)
+            if response.status_code == 200:
+                logger.info(f"✓ Veo model available: {model_name}")
+                return True
+            else:
+                logger.debug(f"✗ Veo model not available: {model_name} ({response.status_code})")
+                return False
+        except Exception as e:
+            logger.debug(f"✗ Veo model check failed: {model_name} - {e}")
+            return False
+
+    def get_available_model(self) -> str:
+        """Find first available Veo model."""
+        if self.available_model:
+            return self.available_model
+
+        for model in self.VEO_MODELS:
+            if self._check_model_available(model):
+                self.available_model = model
+                return model
+
+        raise RuntimeError(f"No Veo models available. Tried: {self.VEO_MODELS}")
 
     def _get_headers(self):
         """Refreshes credentials and returns headers."""
@@ -42,13 +75,18 @@ class VeoClient:
 
     def generate_video(self, prompt: str) -> str:
         """
-        Generates a video using Veo 2.0, polls for completion, and saves to a temporary file.
+        Generates a video using Veo, polls for completion, and saves to a temporary file.
+        Dynamically discovers available Veo model.
         Returns the path to the saved video.
         """
         logger.info(f"Starting Veo video generation with prompt: {prompt[:100]}...")
 
-        # Correct endpoint: predictLongRunning (not generateVideo)
-        self.base_url = f"https://{self.region}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.region}/publishers/google/models/veo-2.0-generate-001:predictLongRunning"
+        # Dynamically find available Veo model
+        model_name = self.get_available_model()
+        logger.info(f"Using Veo model: {model_name}")
+
+        # Correct endpoint: predictLongRunning for video generation
+        self.base_url = f"https://{self.region}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.region}/publishers/google/models/{model_name}:predictLongRunning"
 
         # Correct payload format with instances and parameters
         payload = {

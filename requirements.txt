@@ -8,3 +8,4 @@ google-cloud-storage>=3.0.0
 tenacity==8.2.3
 feedparser==6.0.11
 pytz==2024.1
+newspaper3k>=0.2.8

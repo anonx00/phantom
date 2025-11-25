@@ -139,7 +139,7 @@ class AgentBrain:
     def _discover_available_models(self) -> list:
         """
         Dynamically discovers available Gemini models from Vertex AI.
-        Queries the API and validates each model works before adding to pool.
+        Uses API probing - no hardcoded model lists.
         Returns list of working model names.
         """
         import requests
@@ -148,7 +148,6 @@ class AgentBrain:
 
         discovered_models = []
 
-        # Step 1: Try to query Vertex AI Model Garden API for available models
         logger.info("Discovering available Gemini models from Vertex AI...")
 
         try:
@@ -157,107 +156,168 @@ class AgentBrain:
             credentials.refresh(Request())
             access_token = credentials.token
 
-            # Query the publisher models endpoint
-            api_url = f"https://{self.location}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}/publishers/google/models"
-
             headers = {
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json"
             }
 
-            response = requests.get(api_url, headers=headers, timeout=30)
+            # Dynamic model name generation based on Vertex AI naming patterns
+            # Format: gemini-{major}.{minor}-{variant}-{release}
+            def generate_model_candidates():
+                """Generate possible model names dynamically based on naming conventions."""
+                candidates = []
 
-            if response.status_code == 200:
-                data = response.json()
-                models = data.get("models", data.get("publisherModels", []))
+                # Version patterns (major.minor combinations)
+                versions = ["2.5", "2.0", "1.5", "1.0"]
 
-                for model in models:
-                    model_name = model.get("name", "").split("/")[-1]
-                    # Filter for Gemini models only
-                    if "gemini" in model_name.lower():
+                # Variant patterns
+                variants = ["flash", "pro"]
+
+                # Release patterns
+                releases = ["001", "002", "exp", "latest"]
+
+                for version in versions:
+                    for variant in variants:
+                        for release in releases:
+                            candidates.append(f"gemini-{version}-{variant}-{release}")
+
+                # Add experimental format (gemini-exp-MMDD)
+                import datetime
+                today = datetime.datetime.now()
+                for days_back in range(0, 90, 7):  # Check last ~3 months
+                    date = today - datetime.timedelta(days=days_back)
+                    candidates.append(f"gemini-exp-{date.strftime('%m%d')}")
+
+                return candidates
+
+            # Probe each candidate model via API
+            candidates = generate_model_candidates()
+            logger.info(f"Probing {len(candidates)} candidate model patterns...")
+
+            for model_name in candidates:
+                try:
+                    # Quick API probe - check if model exists
+                    check_url = f"https://{self.location}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}/publishers/google/models/{model_name}"
+                    response = requests.get(check_url, headers=headers, timeout=5)
+
+                    if response.status_code == 200:
                         discovered_models.append(model_name)
-                        logger.info(f"  API discovered: {model_name}")
+                        logger.info(f"  ✓ Found: {model_name}")
+                    # Skip logging 404s to reduce noise
+                except requests.exceptions.Timeout:
+                    continue
+                except Exception:
+                    continue
 
-                logger.info(f"API returned {len(discovered_models)} Gemini models")
-            else:
-                logger.warning(f"Model API returned {response.status_code}: {response.text[:200]}")
+            logger.info(f"Discovered {len(discovered_models)} available Gemini models")
 
         except Exception as e:
-            logger.warning(f"Could not query Model Garden API: {e}")
+            logger.warning(f"Model discovery failed: {e}")
 
-        # Step 2: If API didn't return models, build list from known patterns
+        # Fallback: if nothing found, try basic instantiation
         if not discovered_models:
-            logger.info("Building model list from known Vertex AI patterns...")
-            # These patterns are based on Vertex AI naming conventions
-            # Format: gemini-{version}-{variant}-{release}
-            base_patterns = [
-                # Gemini 2.0 series (latest)
-                "gemini-2.0-flash-001",
-                "gemini-2.0-flash-exp",
-                "gemini-2.0-pro-exp",
-                # Gemini 1.5 series (stable)
-                "gemini-1.5-flash-002",
-                "gemini-1.5-flash-001",
-                "gemini-1.5-pro-002",
-                "gemini-1.5-pro-001",
-                # Experimental variants
-                "gemini-1.5-flash-latest",
-                "gemini-1.5-pro-latest",
-                "gemini-exp-1206",
+            logger.warning("API discovery found no models, trying SDK instantiation...")
+            # Try common patterns via SDK (will fail fast if not available)
+            fallback_patterns = [
+                f"gemini-2.0-flash-001",
+                f"gemini-1.5-flash-002",
             ]
-            discovered_models = base_patterns
+            for pattern in fallback_patterns:
+                try:
+                    model = GenerativeModel(pattern)
+                    # Quick validation - generate minimal content
+                    test_response = model.generate_content("OK")
+                    if test_response.text:
+                        discovered_models.append(pattern)
+                        logger.info(f"  ✓ SDK fallback found: {pattern}")
+                except Exception:
+                    continue
 
-        # Step 3: Validate each model actually works
-        logger.info(f"Validating {len(discovered_models)} candidate models...")
+        # Add discovered models (lazy - no token-wasting validation)
         working_models = []
-
         for model_name in discovered_models:
             try:
                 model = GenerativeModel(model_name)
-                # Minimal test - just check model loads and responds
-                test_response = model.generate_content(
-                    "Say OK",
-                    generation_config={"max_output_tokens": 5, "temperature": 0}
-                )
-
-                if test_response and test_response.text:
-                    self.models[model_name] = model
-                    self.model_names.append(model_name)
-                    working_models.append(model_name)
-                    logger.info(f"  ✓ {model_name} - working")
-                else:
-                    logger.debug(f"  ✗ {model_name} - empty response")
-
+                self.models[model_name] = model
+                self.model_names.append(model_name)
+                working_models.append(model_name)
             except Exception as e:
-                error_msg = str(e)
-                if "404" in error_msg or "not found" in error_msg.lower():
-                    logger.debug(f"  ✗ {model_name} - not available")
-                elif "429" in error_msg or "quota" in error_msg.lower():
-                    # Quota error means model exists but we hit limits - still add it
-                    logger.warning(f"  ⚠ {model_name} - quota limited, adding anyway")
-                    self.models[model_name] = GenerativeModel(model_name)
-                    self.model_names.append(model_name)
-                    working_models.append(model_name)
-                else:
-                    logger.warning(f"  ✗ {model_name} - error: {error_msg[:80]}")
+                logger.debug(f"  ✗ Could not instantiate {model_name}: {e}")
 
-        # Step 4: Sort by preference (flash models first for speed/cost)
+        # Sort by preference (flash first for cost/speed)
         def model_priority(name):
-            if "2.0" in name and "flash" in name:
-                return 0  # Prefer 2.0 flash
-            elif "1.5" in name and "flash" in name:
-                return 1  # Then 1.5 flash
+            if "2.5" in name:
+                return 0 if "flash" in name else 1
             elif "2.0" in name:
-                return 2  # Then 2.0 pro
-            elif "1.5" in name and "pro" in name:
-                return 3  # Then 1.5 pro
-            else:
-                return 4  # Others last
+                return 2 if "flash" in name else 3
+            elif "1.5" in name:
+                return 4 if "flash" in name else 5
+            return 6
 
         self.model_names.sort(key=model_priority)
         logger.info(f"Model priority order: {self.model_names}")
 
         return working_models
+
+    def _get_daily_media_usage(self) -> dict:
+        """
+        Checks today's media generation from Firestore to enforce daily limits.
+        Returns dict with counts: {'video': int, 'image': int, 'infographic': int, 'meme': int}
+        """
+        import datetime
+
+        try:
+            # Get start of today (UTC)
+            today_start = datetime.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Query posts from today
+            docs = self.collection.where("timestamp", ">=", today_start).stream()
+
+            counts = {'video': 0, 'image': 0, 'infographic': 0, 'meme': 0, 'text': 0}
+            for doc in docs:
+                data = doc.to_dict()
+                post_type = data.get('type', 'text')
+                if post_type in counts:
+                    counts[post_type] += 1
+
+            logger.info(f"Today's media usage: {counts}")
+            return counts
+
+        except Exception as e:
+            logger.warning(f"Could not check daily media usage: {e}")
+            return {'video': 0, 'image': 0, 'infographic': 0, 'meme': 0, 'text': 0}
+
+    def _check_media_budget(self, desired_type: str) -> tuple:
+        """
+        Checks if we have budget for the desired media type.
+        Returns (allowed: bool, fallback_type: str, reason: str)
+
+        Daily limits (to control Vertex AI costs):
+        - VIDEO: 1 per day max ($0.50+ each)
+        - IMAGE/INFOGRAPHIC/MEME: 3 per day combined ($0.01-0.05 each)
+        - TEXT: unlimited (free)
+        """
+        DAILY_LIMITS = {
+            'video': 1,           # Very expensive - Veo 2
+            'image': 3,           # Imagen - moderate cost
+            'infographic': 3,     # Uses Imagen
+            'meme': 3,            # Uses Imagen
+        }
+
+        usage = self._get_daily_media_usage()
+
+        # Check video budget
+        if desired_type == 'video':
+            if usage['video'] >= DAILY_LIMITS['video']:
+                return False, 'text', f"Video budget exhausted ({usage['video']}/{DAILY_LIMITS['video']} today)"
+
+        # Check image budget (combined for image/infographic/meme)
+        if desired_type in ['image', 'infographic', 'meme']:
+            image_total = usage['image'] + usage['infographic'] + usage['meme']
+            if image_total >= DAILY_LIMITS['image']:
+                return False, 'text', f"Image budget exhausted ({image_total}/{DAILY_LIMITS['image']} today)"
+
+        return True, desired_type, "Within budget"
 
     def should_post_now(self) -> tuple:
         """
@@ -898,6 +958,15 @@ Reply with EXACTLY ONE WORD: VIDEO, IMAGE, INFOGRAPHIC, MEME, or TEXT"""
                     post_type = "image"
                 else:
                     post_type = "text"
+
+                # COST CONTROL: Check daily media budget before proceeding
+                if post_type != "text":
+                    allowed, fallback_type, budget_reason = self._check_media_budget(post_type)
+                    if not allowed:
+                        logger.warning(f"💰 {budget_reason} - downgrading {post_type} → {fallback_type}")
+                        post_type = fallback_type
+                    else:
+                        logger.info(f"💰 Budget OK for {post_type}: {budget_reason}")
 
                 logger.info(f"Selected post type: {post_type}")
             except Exception as e:

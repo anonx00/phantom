@@ -70,7 +70,7 @@ class HumanScheduler:
         Determines if the bot should post right now.
         Returns (should_post: bool, reason: str).
 
-        Uses randomization to avoid predictable patterns.
+        Uses higher probability to ensure consistent posting.
         """
         now = datetime.now(self.timezone)
         hour = now.hour
@@ -81,13 +81,19 @@ class HumanScheduler:
         if not current_window:
             return False, f"Outside posting hours ({hour}:00 local)"
 
-        # Apply day weight randomization
+        # Apply day weight (weekends slightly less active)
         day_weight = self.day_weights.get(day_of_week, 1.0)
         window_weight = self.posting_windows[current_window]['weight']
 
-        # Combined probability (base 30% * day_weight * window_weight / 4)
-        # This makes posting more likely during peak times
-        post_probability = 0.3 * day_weight * (window_weight / 4)
+        # Higher probability to ensure posts happen
+        # Base 70% * day_weight * normalized window weight
+        # Peak times (evening, afternoon) get ~80-90% probability
+        # Off-peak times get ~50-60% probability
+        normalized_weight = window_weight / 4  # max weight is 4
+        post_probability = 0.70 * day_weight * (0.7 + 0.3 * normalized_weight)
+
+        # Clamp between 40% and 95%
+        post_probability = max(0.40, min(0.95, post_probability))
 
         # Random decision
         roll = random.random()
