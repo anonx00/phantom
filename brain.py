@@ -55,15 +55,14 @@ class AgentBrain:
         vertexai.init(project=self.project_id, location=self.location)
         
         # Multi-model configuration with dynamic discovery
-        # Try Gemini 1.5 first for search compatibility, then newer models
+        # Use current Vertex AI Gemini model versions
         candidate_models = [
-            "gemini-1.5-pro",          # Best for search grounding (if available)
-            "gemini-1.5-flash",        # Fast, supports search (if available)
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-2.0-flash-001",
-            "gemini-2.0-flash-lite-001",
-            "gemini-2.5-pro",
+            "gemini-2.0-flash-001",      # Latest fast model
+            "gemini-1.5-flash-002",      # Stable flash model
+            "gemini-1.5-pro-002",        # Stable pro model
+            "gemini-2.0-flash-exp",      # Experimental flash
+            "gemini-1.5-flash-001",      # Older flash version
+            "gemini-1.5-pro-001",        # Older pro version
         ]
         
         # Dynamic Discovery: Try to fetch models from GCP (e.g. tuned models)
