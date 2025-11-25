@@ -43,6 +43,13 @@ except ImportError:
     MIXER_AVAILABLE = False
     ContentMixer = None
 
+try:
+    from influencer_analyzer import InfluencerAnalyzer
+    INFLUENCER_AVAILABLE = True
+except ImportError:
+    INFLUENCER_AVAILABLE = False
+    InfluencerAnalyzer = None
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -57,6 +64,7 @@ class AgentBrain:
 
         self.model_names = []
         self.models = {}
+        self._current_ai_eval = {}  # Stores AI evaluation for content styling
 
         # Dynamic model discovery from Vertex AI
         candidate_models = self._discover_available_models()
@@ -136,6 +144,15 @@ class AgentBrain:
                 logger.info("✓ Content mixer initialized for varied posting")
             except Exception as e:
                 logger.warning(f"Content mixer not available: {e}")
+
+        # Initialize influencer analyzer for trend analysis
+        self.influencer_analyzer = None
+        if INFLUENCER_AVAILABLE:
+            try:
+                self.influencer_analyzer = InfluencerAnalyzer()
+                logger.info("✓ Influencer analyzer initialized for trend tracking")
+            except Exception as e:
+                logger.warning(f"Influencer analyzer not available: {e}")
 
     def _discover_available_models(self) -> list:
         """
@@ -795,10 +812,96 @@ Does it relate to actual topic "{topic}"? Are all claims real?
             images[0].save(location=output_path, include_generation_parameters=False)
             logger.info(f"Image saved to {output_path}")
             return output_path
-            
+
         except Exception as e:
             logger.error(f"Imagen generation failed: {e}")
             raise
+
+    def _get_trending_insights(self, category: str = 'ai') -> dict:
+        """
+        Gets trending insights from influencer analysis.
+        Returns style recommendations and trending topics.
+        """
+        if not self.influencer_analyzer:
+            return {'has_data': False}
+
+        try:
+            insights = self.influencer_analyzer.get_content_recommendations(category)
+            if insights.get('has_data'):
+                logger.info(f"Got trending insights for {category}: {insights.get('trending_topics', [])[:5]}")
+            return insights
+        except Exception as e:
+            logger.warning(f"Could not get trending insights: {e}")
+            return {'has_data': False}
+
+    def _ai_evaluate_content(self, topic: str, story_context: str, trending_insights: dict) -> dict:
+        """
+        Uses AI to evaluate if content is worth posting based on trending analysis.
+        Returns decision and style recommendations.
+        """
+        if not self.models:
+            return {'should_post': True, 'reason': 'No AI available for evaluation'}
+
+        model = self.models.get(self.model_names[0])
+        if not model:
+            return {'should_post': True, 'reason': 'No model available'}
+
+        # Build context from trending insights
+        trending_context = ""
+        if trending_insights.get('has_data'):
+            trending_topics = trending_insights.get('trending_topics', [])
+            style = trending_insights.get('style_insights', {})
+            top_post = trending_insights.get('top_post', {})
+
+            trending_context = f"""
+CURRENT TRENDING ANALYSIS:
+- Hot topics on Twitter: {', '.join(trending_topics[:10]) if trending_topics else 'N/A'}
+- Top performing post style: ~{style.get('avg_length', 150)} chars, {'uses emojis' if style.get('emoji_usage', 0) > 0.3 else 'minimal emojis'}
+- Hashtag usage: {'common' if style.get('hashtag_usage', 0) > 0.3 else 'rare'}
+- Example high-engagement post: "{top_post.get('text', 'N/A')[:100]}..." ({top_post.get('engagement', 0)} engagement)
+"""
+
+        evaluation_prompt = f"""You are a social media strategist. Evaluate if this content is worth posting.
+
+PROPOSED CONTENT:
+Topic: {topic}
+Context: {story_context[:500]}
+
+{trending_context}
+
+EVALUATE:
+1. Is this topic timely and relevant? (trending or newsworthy)
+2. Does it align with what's getting engagement on Twitter?
+3. Would it interest tech/AI/crypto audience?
+
+Respond in this exact format:
+DECISION: POST or SKIP
+CONFIDENCE: HIGH/MEDIUM/LOW
+REASON: <one line reason>
+STYLE_TIP: <one line style recommendation based on trending analysis>
+SUGGESTED_HASHTAGS: <2-3 relevant hashtags or "none">
+"""
+
+        try:
+            response = model.generate_content(evaluation_prompt)
+            result_text = response.text.strip()
+
+            # Parse response
+            decision = 'POST' in result_text.upper().split('DECISION:')[1].split('\n')[0] if 'DECISION:' in result_text else True
+            reason = result_text.split('REASON:')[1].split('\n')[0].strip() if 'REASON:' in result_text else 'AI evaluation'
+            style_tip = result_text.split('STYLE_TIP:')[1].split('\n')[0].strip() if 'STYLE_TIP:' in result_text else ''
+            hashtags = result_text.split('SUGGESTED_HASHTAGS:')[1].split('\n')[0].strip() if 'SUGGESTED_HASHTAGS:' in result_text else ''
+
+            return {
+                'should_post': decision,
+                'reason': reason,
+                'style_tip': style_tip,
+                'hashtags': hashtags if hashtags.lower() != 'none' else '',
+                'trending_topics': trending_insights.get('trending_topics', [])
+            }
+        except Exception as e:
+            logger.warning(f"AI evaluation failed: {e}")
+            return {'should_post': True, 'reason': f'Evaluation failed: {e}'}
 
     def get_strategy(self):
         """
@@ -823,15 +926,42 @@ Does it relate to actual topic "{topic}"? Are all claims real?
     def _generate_strategy_with_validation(self, attempt: int = 0) -> dict:
         """
         Internal method to generate and validate a strategy.
-        Separated for retry logic.
+        Separated for retry logic. Uses AI to evaluate content based on trending analysis.
         """
         # Get preferred categories based on recent post history (variety + balance)
         preferred_categories = self._get_preferred_categories()
+        primary_category = preferred_categories[0] if preferred_categories else 'ai'
+
+        # Fetch trending insights from top influencers
+        trending_insights = self._get_trending_insights(primary_category)
+        if trending_insights.get('has_data'):
+            logger.info(f"Using trending insights: {trending_insights.get('recommendation', 'N/A')}")
 
         story = self._get_trending_story(preferred_categories=preferred_categories)
         topic = story['title']
         story_url = story.get('url')  # Real URL or None
         story_context = story.get('context', f"Article: {topic}")  # Rich context from article
+
+        # AI-based content evaluation
+        ai_eval = self._ai_evaluate_content(topic, story_context, trending_insights)
+        if not ai_eval.get('should_post', True):
+            logger.info(f"AI recommends SKIP: {ai_eval.get('reason', 'No reason')}")
+            # Try to find better content
+            for retry in range(3):
+                story = self._get_trending_story(preferred_categories=preferred_categories)
+                topic = story['title']
+                story_url = story.get('url')
+                story_context = story.get('context', f"Article: {topic}")
+                ai_eval = self._ai_evaluate_content(topic, story_context, trending_insights)
+                if ai_eval.get('should_post', True):
+                    logger.info(f"AI approved alternate content: {ai_eval.get('reason', 'N/A')}")
+                    break
+            else:
+                logger.warning("AI rejected all alternatives, proceeding anyway")
+
+        # Store AI recommendations for content generation
+        self._current_ai_eval = ai_eval
+        logger.info(f"AI style tip: {ai_eval.get('style_tip', 'N/A')}")
 
         # Retry logic for duplicates (check both topic AND URL)
         if self._check_history(topic, story_url):
