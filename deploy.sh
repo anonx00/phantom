@@ -47,13 +47,17 @@ else
 fi
 
 # 5. Create/Update Cloud Schedulers (Multiple triggers for human-like posting)
-# Use a specific service account for the scheduler
-# For this script, we'll try to find the default compute service account if not manually specified
-SERVICE_ACCOUNT_EMAIL=$(gcloud iam service-accounts list --filter="displayName:Compute Engine default service account" --format="value(email)" --limit=1)
+# Use the tech-influencer service account or default compute service account
+SERVICE_ACCOUNT_EMAIL="tech-influencer-sa@${PROJECT_ID}.iam.gserviceaccount.com"
 
-if [ -z "$SERVICE_ACCOUNT_EMAIL" ]; then
-    SERVICE_ACCOUNT_EMAIL=$(gcloud config get-value account)
-    echo "WARNING: Using active account $SERVICE_ACCOUNT_EMAIL. In production, use a service account."
+# Check if service account exists, fallback to default compute
+if ! gcloud iam service-accounts describe $SERVICE_ACCOUNT_EMAIL > /dev/null 2>&1; then
+    SERVICE_ACCOUNT_EMAIL="${PROJECT_ID//[^0-9]/}-compute@developer.gserviceaccount.com"
+    # Try to get the actual compute SA
+    COMPUTE_SA=$(gcloud iam service-accounts list --filter="email:compute@developer.gserviceaccount.com" --format="value(email)" --limit=1)
+    if [ -n "$COMPUTE_SA" ]; then
+        SERVICE_ACCOUNT_EMAIL=$COMPUTE_SA
+    fi
 fi
 
 echo "Using Service Account: $SERVICE_ACCOUNT_EMAIL"
