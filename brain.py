@@ -139,110 +139,73 @@ class AgentBrain:
     def _discover_available_models(self) -> list:
         """
         Dynamically discovers available Gemini models from Vertex AI.
-        Uses API probing - no hardcoded model lists.
+        Uses SDK instantiation to test which models work.
         Returns list of working model names.
         """
-        import requests
-        from google.auth import default
-        from google.auth.transport.requests import Request
-
         discovered_models = []
 
         logger.info("Discovering available Gemini models from Vertex AI...")
 
-        try:
-            # Get credentials for API call
-            credentials, project = default()
-            credentials.refresh(Request())
-            access_token = credentials.token
+        # Generate candidate model names dynamically based on naming conventions
+        def generate_model_candidates():
+            """Generate model names based on Vertex AI patterns."""
+            candidates = []
 
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
-            }
+            # Version patterns (ordered by preference - newest first)
+            versions = ["2.5", "2.0", "1.5"]
 
-            # Dynamic model name generation based on Vertex AI naming patterns
-            # Format: gemini-{major}.{minor}-{variant}-{release}
-            def generate_model_candidates():
-                """Generate possible model names dynamically based on naming conventions."""
-                candidates = []
+            # Variant patterns (flash preferred for cost/speed)
+            variants = ["flash", "pro"]
 
-                # Version patterns (major.minor combinations)
-                versions = ["2.5", "2.0", "1.5", "1.0"]
+            # Release patterns
+            releases = ["001", "002", "exp"]
 
-                # Variant patterns
-                variants = ["flash", "pro"]
+            for version in versions:
+                for variant in variants:
+                    for release in releases:
+                        candidates.append(f"gemini-{version}-{variant}-{release}")
 
-                # Release patterns
-                releases = ["001", "002", "exp", "latest"]
+            # Add experimental date-based models
+            import datetime
+            today = datetime.datetime.now()
+            for days_back in [0, 7, 14, 30]:  # Recent experiments only
+                date = today - datetime.timedelta(days=days_back)
+                candidates.append(f"gemini-exp-{date.strftime('%m%d')}")
 
-                for version in versions:
-                    for variant in variants:
-                        for release in releases:
-                            candidates.append(f"gemini-{version}-{variant}-{release}")
+            return candidates
 
-                # Add experimental format (gemini-exp-MMDD)
-                import datetime
-                today = datetime.datetime.now()
-                for days_back in range(0, 90, 7):  # Check last ~3 months
-                    date = today - datetime.timedelta(days=days_back)
-                    candidates.append(f"gemini-exp-{date.strftime('%m%d')}")
+        candidates = generate_model_candidates()
+        logger.info(f"Testing {len(candidates)} candidate model patterns via SDK...")
 
-                return candidates
+        # Test each candidate via SDK - stop after finding enough working models
+        MAX_WORKING_MODELS = 3  # Don't need more than 3 working models
+        tested = 0
 
-            # Probe each candidate model via API
-            candidates = generate_model_candidates()
-            logger.info(f"Probing {len(candidates)} candidate model patterns...")
+        for model_name in candidates:
+            if len(discovered_models) >= MAX_WORKING_MODELS:
+                logger.info(f"Found {MAX_WORKING_MODELS} working models, stopping search")
+                break
 
-            for model_name in candidates:
-                try:
-                    # Quick API probe - check if model exists
-                    check_url = f"https://{self.location}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.location}/publishers/google/models/{model_name}"
-                    response = requests.get(check_url, headers=headers, timeout=5)
-
-                    if response.status_code == 200:
-                        discovered_models.append(model_name)
-                        logger.info(f"  ✓ Found: {model_name}")
-                    # Skip logging 404s to reduce noise
-                except requests.exceptions.Timeout:
-                    continue
-                except Exception:
-                    continue
-
-            logger.info(f"Discovered {len(discovered_models)} available Gemini models")
-
-        except Exception as e:
-            logger.warning(f"Model discovery failed: {e}")
-
-        # Fallback: if nothing found, try basic instantiation
-        if not discovered_models:
-            logger.warning("API discovery found no models, trying SDK instantiation...")
-            # Try common patterns via SDK (will fail fast if not available)
-            fallback_patterns = [
-                f"gemini-2.0-flash-001",
-                f"gemini-1.5-flash-002",
-            ]
-            for pattern in fallback_patterns:
-                try:
-                    model = GenerativeModel(pattern)
-                    # Quick validation - generate minimal content
-                    test_response = model.generate_content("OK")
-                    if test_response.text:
-                        discovered_models.append(pattern)
-                        logger.info(f"  ✓ SDK fallback found: {pattern}")
-                except Exception:
-                    continue
-
-        # Add discovered models (lazy - no token-wasting validation)
-        working_models = []
-        for model_name in discovered_models:
             try:
                 model = GenerativeModel(model_name)
-                self.models[model_name] = model
-                self.model_names.append(model_name)
-                working_models.append(model_name)
+                # Quick test - minimal token usage
+                test_response = model.generate_content("1")
+                if test_response.text:
+                    discovered_models.append(model_name)
+                    self.models[model_name] = model
+                    self.model_names.append(model_name)
+                    logger.info(f"  ✓ {model_name} - working")
+                    tested += 1
             except Exception as e:
-                logger.debug(f"  ✗ Could not instantiate {model_name}: {e}")
+                error_str = str(e).lower()
+                if "404" in error_str or "not found" in error_str:
+                    # Model doesn't exist - skip silently
+                    pass
+                else:
+                    logger.debug(f"  ✗ {model_name}: {str(e)[:50]}")
+
+        if not discovered_models:
+            logger.error("No Gemini models found! Check Vertex AI configuration.")
 
         # Sort by preference (flash first for cost/speed)
         def model_priority(name):
@@ -255,9 +218,9 @@ class AgentBrain:
             return 6
 
         self.model_names.sort(key=model_priority)
-        logger.info(f"Model priority order: {self.model_names}")
+        logger.info(f"✓ Active models ({len(discovered_models)}): {self.model_names}")
 
-        return working_models
+        return discovered_models
 
     def _get_daily_media_usage(self) -> dict:
         """
