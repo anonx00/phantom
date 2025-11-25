@@ -62,7 +62,8 @@ class AgentBrain:
         candidate_models = self._discover_available_models()
 
         if not candidate_models:
-            raise RuntimeError("No Gemini models discovered. Check Vertex AI API access.")
+            logger.critical("No Gemini models discovered! This is fatal.")
+            raise RuntimeError("No Gemini models discovered. Check Vertex AI API access and ensure models are enabled.")
 
         logger.info(f"✓ Active models ({len(self.models)}): {self.model_names}")
 
