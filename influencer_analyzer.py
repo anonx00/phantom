@@ -54,10 +54,15 @@ class InfluencerAnalyzer:
     # Regions to exclude (ISO country codes for filtering)
     EXCLUDED_REGIONS = {'IN'}  # India
 
+    # Free tier: 1 search request per 15 minutes
+    FREE_TIER_COOLDOWN_SECONDS = 15 * 60  # 15 minutes
+
     def __init__(self, bearer_token: str = None):
         """Initialize with Twitter API credentials from Secret Manager."""
         self.bearer_token = bearer_token
         self.client = None
+        self._last_api_call = None  # Track last API call time
+        self._cached_results = {}   # Cache results to avoid repeated calls
 
         # Try to load from Secret Manager if not provided
         if not self.bearer_token and SECRET_MANAGER_AVAILABLE:
@@ -70,11 +75,43 @@ class InfluencerAnalyzer:
         if self.bearer_token:
             try:
                 self.client = tweepy.Client(bearer_token=self.bearer_token)
-                logger.info("✓ Influencer analyzer initialized with Twitter API")
+                logger.info("✓ Influencer analyzer initialized with Twitter API (FREE TIER - 1 req/15min)")
             except Exception as e:
                 logger.warning(f"Could not initialize Twitter client: {e}")
         else:
             logger.warning("Twitter bearer token not available - influencer analysis disabled")
+
+    def _can_make_api_call(self) -> bool:
+        """Check if we can make an API call (free tier: 1 per 15 min)."""
+        if self._last_api_call is None:
+            return True
+
+        elapsed = (datetime.now() - self._last_api_call).total_seconds()
+        if elapsed < self.FREE_TIER_COOLDOWN_SECONDS:
+            remaining = int(self.FREE_TIER_COOLDOWN_SECONDS - elapsed)
+            logger.info(f"Twitter API rate limit: {remaining}s remaining until next call allowed")
+            return False
+        return True
+
+    def get_rate_limit_status(self) -> Dict:
+        """Returns current rate limit status for monitoring."""
+        if self._last_api_call is None:
+            return {
+                'can_call': True,
+                'last_call': None,
+                'seconds_remaining': 0,
+                'cached_categories': list(self._cached_results.keys())
+            }
+
+        elapsed = (datetime.now() - self._last_api_call).total_seconds()
+        remaining = max(0, self.FREE_TIER_COOLDOWN_SECONDS - elapsed)
+
+        return {
+            'can_call': elapsed >= self.FREE_TIER_COOLDOWN_SECONDS,
+            'last_call': self._last_api_call.isoformat(),
+            'seconds_remaining': int(remaining),
+            'cached_categories': list(self._cached_results.keys())
+        }
 
     def _is_excluded_region(self, user_data: dict) -> bool:
         """
@@ -109,18 +146,33 @@ class InfluencerAnalyzer:
         """
         Fetches high-engagement posts for a category using search.
         Returns list of posts with engagement metrics.
-        Free tier: limited queries to avoid rate limits.
+        Free tier: 1 request per 15 minutes - uses caching.
         """
-        import time
-
         if not self.client:
             logger.warning("Twitter client not available")
+            return []
+
+        # Check cache first (valid for 15 min cooldown period)
+        cache_key = f"{category}_{limit}"
+        if cache_key in self._cached_results:
+            cached_time, cached_data = self._cached_results[cache_key]
+            cache_age = (datetime.now() - cached_time).total_seconds()
+            if cache_age < self.FREE_TIER_COOLDOWN_SECONDS:
+                logger.info(f"Using cached results for {category} ({int(cache_age)}s old, {int(self.FREE_TIER_COOLDOWN_SECONDS - cache_age)}s until refresh)")
+                return cached_data
+
+        # Check rate limit before making API call
+        if not self._can_make_api_call():
+            logger.info(f"Rate limited - returning cached/empty results for {category}")
+            # Return stale cache if available, otherwise empty
+            if cache_key in self._cached_results:
+                return self._cached_results[cache_key][1]
             return []
 
         queries = self.CATEGORY_QUERIES.get(category, self.CATEGORY_QUERIES['tech'])
         all_posts = []
 
-        # Free tier: only use first query to avoid rate limits
+        # Free tier: only use first query (1 request per 15 min)
         queries_to_use = queries[:1]
 
         for query in queries_to_use:
@@ -133,6 +185,10 @@ class InfluencerAnalyzer:
                     user_fields=['name', 'username', 'location', 'description', 'public_metrics'],
                     expansions=['author_id']
                 )
+
+                # Track API call time for rate limiting
+                self._last_api_call = datetime.now()
+                logger.info(f"Twitter API call made at {self._last_api_call.strftime('%H:%M:%S')} - next allowed in 15 min")
 
                 if not tweets.data:
                     continue
@@ -188,24 +244,45 @@ class InfluencerAnalyzer:
 
         # Sort by engagement and return top posts
         all_posts.sort(key=lambda x: x['engagement_score'], reverse=True)
-        logger.info(f"Found {len(all_posts)} trending posts for {category}")
+        result = all_posts[:limit]
 
-        return all_posts[:limit]
+        # Cache results for rate limiting period
+        self._cached_results[cache_key] = (datetime.now(), result)
+        logger.info(f"Found {len(result)} trending posts for {category} (cached for 15 min)")
+
+        return result
 
     def get_trending_topics(self, categories: List[str] = None) -> Dict[str, List[Dict]]:
         """
         Gets trending posts across multiple categories.
         Returns dict mapping category -> list of top posts.
+
+        Note: Free tier only allows 1 API call per 15 min, so this
+        will return cached results for most categories.
         """
         if categories is None:
             categories = ['ai', 'crypto', 'tech', 'finance']
 
         trending = {}
+        api_calls_made = 0
+
         for category in categories:
+            # Free tier: only make 1 fresh API call per invocation
+            # Rest will use cache or return empty
+            if api_calls_made > 0 and not self._can_make_api_call():
+                logger.debug(f"Skipping fresh fetch for {category} - rate limited")
+
             posts = self.fetch_trending_posts(category, limit=5)
             if posts:
                 trending[category] = posts
+                # Check if this was a fresh call (not cached)
+                cache_key = f"{category}_5"
+                if cache_key in self._cached_results:
+                    cache_time, _ = self._cached_results[cache_key]
+                    if (datetime.now() - cache_time).total_seconds() < 5:
+                        api_calls_made += 1
 
+        logger.info(f"Trending topics: {len(trending)} categories with data")
         return trending
 
     def analyze_posting_style(self, posts: List[Dict]) -> Dict:
