@@ -9,6 +9,26 @@ logger = logging.getLogger(__name__)
 class NewsFetcher:
     """Fetches real tech news from various sources including AI, crypto, and finance."""
 
+    # Trusted domains - only accept stories from verified sources
+    TRUSTED_DOMAINS = [
+        # Major tech companies
+        'google.com', 'blog.google', 'openai.com', 'anthropic.com', 'microsoft.com',
+        'apple.com', 'meta.com', 'amazon.com', 'nvidia.com', 'github.com',
+        # Tech news
+        'techcrunch.com', 'theverge.com', 'arstechnica.com', 'wired.com',
+        'engadget.com', 'zdnet.com', 'cnet.com', 'tomshardware.com',
+        # Developer/Tech
+        'hackernews.com', 'ycombinator.com', 'dev.to', 'medium.com',
+        'stackoverflow.com', 'reddit.com', 'lobste.rs',
+        # AI/ML specific
+        'huggingface.co', 'arxiv.org', 'paperswithcode.com',
+        # Crypto/Finance
+        'coindesk.com', 'cointelegraph.com', 'bloomberg.com', 'reuters.com',
+        'cnbc.com', 'wsj.com', 'ft.com', 'yahoo.com',
+        # General news that covers tech
+        'bbc.com', 'nytimes.com', 'theguardian.com', 'forbes.com',
+    ]
+
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
@@ -31,6 +51,45 @@ class NewsFetcher:
                 'https://www.cnbc.com/id/100003114/device/rss/rss.html',
             ]
         }
+
+    def _is_trusted_domain(self, url: str) -> bool:
+        """Check if URL is from a trusted domain."""
+        if not url:
+            return False
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc.lower()
+            # Remove www. prefix
+            if domain.startswith('www.'):
+                domain = domain[4:]
+
+            # Check against trusted domains
+            for trusted in self.TRUSTED_DOMAINS:
+                if domain == trusted or domain.endswith('.' + trusted):
+                    return True
+
+            logger.debug(f"Untrusted domain: {domain}")
+            return False
+        except Exception:
+            return False
+
+    def _is_valid_story(self, title: str, url: str) -> bool:
+        """
+        Dynamic validation - checks if story is legitimate.
+        Uses domain verification + basic title sanity checks.
+        """
+        # Must have URL from trusted domain
+        if not self._is_trusted_domain(url):
+            logger.debug(f"Rejected untrusted: {url}")
+            return False
+
+        # Title sanity checks
+        if not title or len(title) < 10:
+            return False
+        if len(title) > 300:  # Suspiciously long
+            return False
+
+        return True
 
     def fetch_hacker_news_top_stories(self, limit: int = 30) -> List[Dict]:
         """
@@ -86,13 +145,17 @@ class NewsFetcher:
 
             for entry in feed.entries[:limit]:
                 if hasattr(entry, 'link') and hasattr(entry, 'title'):
-                    stories.append({
-                        'title': entry.title,
-                        'url': entry.link,
-                        'score': 0,  # RSS feeds don't have scores
-                        'source': feed.feed.get('title', category),
-                        'category': category
-                    })
+                    # Validate story before adding
+                    if self._is_valid_story(entry.title, entry.link):
+                        stories.append({
+                            'title': entry.title,
+                            'url': entry.link,
+                            'score': 0,  # RSS feeds don't have scores
+                            'source': feed.feed.get('title', category),
+                            'category': category
+                        })
+                    else:
+                        logger.debug(f"Filtered out: {entry.title[:50]}...")
 
             logger.info(f"✓ Fetched {len(stories)} stories from {category} RSS")
 
