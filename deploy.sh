@@ -46,7 +46,7 @@ else
         --task-timeout 10m
 fi
 
-# 5. Create/Update Cloud Scheduler (Runs daily at 9am)
+# 5. Create/Update Cloud Schedulers (Multiple triggers for human-like posting)
 # Use a specific service account for the scheduler
 # For this script, we'll try to find the default compute service account if not manually specified
 SERVICE_ACCOUNT_EMAIL=$(gcloud iam service-accounts list --filter="displayName:Compute Engine default service account" --format="value(email)" --limit=1)
@@ -58,22 +58,63 @@ fi
 
 echo "Using Service Account: $SERVICE_ACCOUNT_EMAIL"
 
-# Check if scheduler job exists
+# Define multiple trigger schedules for human-like posting
+# Times are in Australia/Sydney timezone (AEST/AEDT)
+# The scheduler in the app will randomly decide whether to actually post
+
+SCHEDULES=(
+    "tech-influencer-morning:30 7 * * *"      # 7:30 AM - Morning coffee
+    "tech-influencer-midmorning:15 10 * * *"  # 10:15 AM - Mid-morning
+    "tech-influencer-lunch:45 12 * * *"       # 12:45 PM - Lunch break
+    "tech-influencer-afternoon:30 15 * * *"   # 3:30 PM - Afternoon
+    "tech-influencer-evening:0 18 * * *"      # 6:00 PM - Evening (peak)
+    "tech-influencer-night:30 20 * * *"       # 8:30 PM - Night scroll
+    "tech-influencer-late:45 22 * * *"        # 10:45 PM - Late night
+)
+
+echo "Creating/updating ${#SCHEDULES[@]} scheduler triggers..."
+
+for schedule_entry in "${SCHEDULES[@]}"; do
+    SCHEDULE_NAME="${schedule_entry%%:*}"
+    CRON_EXPR="${schedule_entry##*:}"
+
+    echo "  - $SCHEDULE_NAME: $CRON_EXPR (Australia/Sydney)"
+
+    if gcloud scheduler jobs describe $SCHEDULE_NAME --location $REGION > /dev/null 2>&1; then
+        gcloud scheduler jobs update http $SCHEDULE_NAME \
+            --schedule "$CRON_EXPR" \
+            --time-zone "Australia/Sydney" \
+            --uri "https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$JOB_NAME:run" \
+            --http-method POST \
+            --oauth-service-account-email $SERVICE_ACCOUNT_EMAIL \
+            --location $REGION \
+            --quiet
+    else
+        gcloud scheduler jobs create http $SCHEDULE_NAME \
+            --schedule "$CRON_EXPR" \
+            --time-zone "Australia/Sydney" \
+            --uri "https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$JOB_NAME:run" \
+            --http-method POST \
+            --oauth-service-account-email $SERVICE_ACCOUNT_EMAIL \
+            --location $REGION \
+            --quiet
+    fi
+done
+
+# Clean up old single scheduler if it exists
 if gcloud scheduler jobs describe tech-influencer-schedule --location $REGION > /dev/null 2>&1; then
-    gcloud scheduler jobs update http tech-influencer-schedule \
-        --schedule "0 9 * * *" \
-        --uri "https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$JOB_NAME:run" \
-        --http-method POST \
-        --oauth-service-account-email $SERVICE_ACCOUNT_EMAIL \
-        --location $REGION
-else
-    gcloud scheduler jobs create http tech-influencer-schedule \
-        --schedule "0 9 * * *" \
-        --uri "https://$REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/$JOB_NAME:run" \
-        --http-method POST \
-        --oauth-service-account-email $SERVICE_ACCOUNT_EMAIL \
-        --location $REGION
+    echo "Removing old single-trigger scheduler..."
+    gcloud scheduler jobs delete tech-influencer-schedule --location $REGION --quiet
 fi
 
-echo "Deployment Complete! You can manually trigger the job with:"
-echo "gcloud run jobs execute $JOB_NAME --region $REGION"
+echo ""
+echo "Deployment Complete!"
+echo ""
+echo "Multiple scheduler triggers created. The app uses probabilistic posting"
+echo "to simulate human-like behavior (not every trigger results in a post)."
+echo ""
+echo "Manual commands:"
+echo "  Force a post now: gcloud run jobs execute $JOB_NAME --region $REGION --update-env-vars FORCE_POST=true"
+echo "  Normal trigger:   gcloud run jobs execute $JOB_NAME --region $REGION"
+echo ""
+echo "View scheduler status: gcloud scheduler jobs list --location $REGION"
