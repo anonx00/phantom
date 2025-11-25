@@ -14,6 +14,35 @@ import os
 import re
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+# Optional imports for new features
+try:
+    from youtube_fetcher import YouTubeFetcher
+    YOUTUBE_AVAILABLE = True
+except ImportError:
+    YOUTUBE_AVAILABLE = False
+    YouTubeFetcher = None
+
+try:
+    from infographic_generator import InfographicGenerator
+    INFOGRAPHIC_AVAILABLE = True
+except ImportError:
+    INFOGRAPHIC_AVAILABLE = False
+    InfographicGenerator = None
+
+try:
+    from scheduler import HumanScheduler
+    SCHEDULER_AVAILABLE = True
+except ImportError:
+    SCHEDULER_AVAILABLE = False
+    HumanScheduler = None
+
+try:
+    from content_mixer import ContentMixer
+    MIXER_AVAILABLE = True
+except ImportError:
+    MIXER_AVAILABLE = False
+    ContentMixer = None
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -111,6 +140,148 @@ class AgentBrain:
         # Initialize tone validator with dynamic pattern matching
         self.tone_validator = ToneValidator()
         logger.info("✓ Tone validator initialized with pattern-based validation")
+
+        # Initialize YouTube fetcher for infographic topics
+        self.youtube_fetcher = None
+        if YOUTUBE_AVAILABLE:
+            try:
+                self.youtube_fetcher = YouTubeFetcher()
+                logger.info("✓ YouTube fetcher initialized for infographic topics")
+            except Exception as e:
+                logger.warning(f"YouTube fetcher not available: {e}")
+
+        # Initialize infographic generator
+        self.infographic_generator = None
+        if INFOGRAPHIC_AVAILABLE:
+            try:
+                self.infographic_generator = InfographicGenerator()
+                logger.info("✓ Infographic generator initialized (Imagen 3)")
+            except Exception as e:
+                logger.warning(f"Infographic generator not available: {e}")
+
+        # Initialize human-like scheduler
+        self.scheduler = None
+        if SCHEDULER_AVAILABLE:
+            try:
+                self.scheduler = HumanScheduler()
+                logger.info("✓ Human scheduler initialized (Australia/Sydney)")
+            except Exception as e:
+                logger.warning(f"Scheduler not available: {e}")
+
+        # Initialize content mixer for varied post types
+        self.content_mixer = None
+        if MIXER_AVAILABLE:
+            try:
+                self.content_mixer = ContentMixer(
+                    news_fetcher=self.news_fetcher,
+                    youtube_fetcher=self.youtube_fetcher,
+                    infographic_generator=self.infographic_generator,
+                    scheduler=self.scheduler
+                )
+                logger.info("✓ Content mixer initialized for varied posting")
+            except Exception as e:
+                logger.warning(f"Content mixer not available: {e}")
+
+    def should_post_now(self) -> tuple:
+        """
+        Uses scheduler to determine if we should post now.
+        Returns (should_post: bool, reason: str).
+        """
+        if self.scheduler:
+            return self.scheduler.should_post_now()
+        return True, "No scheduler configured, always post"
+
+    def get_preferred_post_types(self) -> list:
+        """
+        Gets time-appropriate post types from scheduler.
+        """
+        if self.scheduler:
+            return self.scheduler.get_preferred_post_types()
+        return ['text', 'image', 'video', 'meme', 'infographic']
+
+    def generate_infographic(self, topic: str, key_points: list = None, source_url: str = None) -> dict:
+        """
+        Generates an infographic image for educational content.
+        Returns dict with 'image_path', 'caption', 'image_prompt'.
+        """
+        if not self.infographic_generator:
+            raise ValueError("Infographic generator not available")
+
+        logger.info(f"Generating infographic for: {topic}")
+
+        # Select style based on topic
+        style = self.infographic_generator.select_style(topic)
+
+        # Generate the infographic
+        image_path = self.infographic_generator.generate(
+            topic=topic,
+            key_points=key_points,
+            style=style
+        )
+
+        # Generate caption
+        caption = self._generate_infographic_caption(topic, key_points, source_url)
+
+        # Get the prompt used (for logging)
+        image_prompt = self.infographic_generator.generate_infographic_prompt(
+            topic=topic,
+            key_points=key_points,
+            style=style
+        )
+
+        return {
+            'image_path': image_path,
+            'content': caption,
+            'image_prompt': image_prompt,
+            'style': style
+        }
+
+    def _generate_infographic_caption(self, topic: str, key_points: list = None, source_url: str = None) -> str:
+        """Generates a caption for infographic post."""
+        # Use AI to generate engaging caption
+        points_text = ""
+        if key_points:
+            points_text = f"Key concepts: {', '.join(key_points[:3])}"
+
+        caption_prompt = f"""Write a brief, engaging caption for an infographic about:
+
+Topic: {topic}
+{points_text}
+
+Requirements:
+- 80-150 characters
+- Informative but casual tone
+- No hashtags, no emojis
+- Sound like a human sharing educational content
+- End with punctuation
+
+Good examples:
+- "Breaking down how transformers actually work. The attention mechanism visualized."
+- "AI model sizes compared. From GPT-2 to GPT-4, the scale is wild."
+- "Bitcoin mining explained in one graphic. Proof-of-work demystified."
+
+Write the caption:"""
+
+        try:
+            caption = self._generate_with_fallback(caption_prompt)
+            caption = caption.strip().strip('"')
+
+            # Add source URL if provided
+            if source_url:
+                if len(caption) + len(source_url) + 4 <= 280:
+                    caption = f"{caption}\n\n{source_url}"
+                else:
+                    max_len = 280 - len(source_url) - 7
+                    caption = f"{caption[:max_len]}...\n\n{source_url}"
+
+            return caption
+
+        except Exception as e:
+            logger.warning(f"Caption generation failed: {e}")
+            base = f"Explaining: {topic[:100]}"
+            if source_url:
+                return f"{base}\n\n{source_url}"
+            return base
 
     def _extract_urls(self, text: str) -> list:
         """Extracts all URLs from text."""
@@ -573,7 +744,7 @@ Does it relate to actual topic "{topic}"? Are all claims real?
         else:
             logger.info("BUDGET_MODE disabled, deciding optimal format for media generation")
             # Ask AI if media actually adds value or if text + link is better
-            decision_prompt = f"""For this tech news, decide if MEDIA adds value or if TEXT + LINK is better.
+            decision_prompt = f"""For this tech news, decide the BEST format for maximum engagement.
 
 ARTICLE CONTEXT:
 {story_context}
@@ -595,6 +766,13 @@ Choose IMAGE only if:
 - Before/after comparison is meaningful
 - Example: "New chip design", "UI redesign comparison"
 
+Choose INFOGRAPHIC if:
+- Article explains a CONCEPT that would benefit from educational visualization
+- Complex topic that can be broken down into visual components
+- Statistics, comparisons, or trends that work well as data viz
+- Topic is educational and could be shown as a diagram/chart
+- Example: "AI model comparison", "Evolution of programming languages", "Tech market trends"
+
 Choose MEME if:
 - Story is ironic, contradictory, or absurd (perfect for meme format)
 - Situation is relatable and funny to tech community
@@ -608,9 +786,9 @@ Choose TEXT if:
 - Media would be redundant with preview
 - Example: "Company raises $X", "Partnership announced"
 
-IMPORTANT: Don't generate redundant media just for engagement. If the Twitter link preview card shows the story well, use TEXT. MEME should be used sparingly for truly ironic/funny stories (every 5-7 posts).
+IMPORTANT: Don't generate redundant media just for engagement. If the Twitter link preview card shows the story well, use TEXT. MEME should be used sparingly (every 5-7 posts). INFOGRAPHIC is great for educational content.
 
-Reply with EXACTLY ONE WORD: VIDEO, IMAGE, MEME, or TEXT"""
+Reply with EXACTLY ONE WORD: VIDEO, IMAGE, INFOGRAPHIC, MEME, or TEXT"""
 
             try:
                 decision = self._generate_with_fallback(decision_prompt).upper()
@@ -618,6 +796,8 @@ Reply with EXACTLY ONE WORD: VIDEO, IMAGE, MEME, or TEXT"""
 
                 if "VIDEO" in decision:
                     post_type = "video"
+                elif "INFOGRAPHIC" in decision:
+                    post_type = "infographic"
                 elif "MEME" in decision:
                     post_type = "meme"
                 elif "IMAGE" in decision:
@@ -967,6 +1147,96 @@ Now generate the meme:
 
             strategy["content"] = caption
             strategy["image_prompt"] = meme_image_prompt  # Use same image generation as IMAGE type
+
+        elif post_type == "infographic":
+            # Generate educational infographic
+            logger.info(f"Generating infographic for: {topic}")
+
+            # Extract key points from article context for infographic
+            key_points_prompt = f"""Extract 3-5 KEY CONCEPTS from this article for an educational infographic.
+
+ARTICLE CONTEXT:
+{story_context}
+
+TOPIC: {topic}
+
+Return ONLY a comma-separated list of short concepts (2-4 words each).
+Example: "Neural Networks, Attention Mechanism, Training Data, Model Size, Inference Speed"
+
+Key concepts:"""
+
+            key_points = []
+            try:
+                key_points_response = self._generate_with_fallback(key_points_prompt)
+                key_points = [kp.strip() for kp in key_points_response.split(',')][:5]
+                logger.info(f"Extracted key points: {key_points}")
+            except Exception as e:
+                logger.warning(f"Key points extraction failed: {e}")
+                key_points = ['Technology', 'Innovation', 'Digital']
+
+            # Generate infographic caption
+            infographic_caption_prompt = f"""Write a caption for an educational infographic about:
+
+TOPIC: {topic}
+KEY CONCEPTS: {', '.join(key_points)}
+
+Requirements:
+- 80-150 characters
+- Informative but casual tone
+- Sounds like a human sharing educational content
+- NO hashtags, NO emojis
+- End with punctuation
+
+Good examples:
+- "Breaking down how transformers work. The attention mechanism visualized."
+- "AI model sizes compared. From GPT-2 to GPT-4, the scale is wild."
+- "Bitcoin mining explained. Proof-of-work in one graphic."
+
+Caption:"""
+
+            try:
+                caption = self._generate_with_fallback(infographic_caption_prompt)
+                caption = caption.strip().strip('"')
+
+                # Validate caption
+                if len(caption) < 20 or not any(caption.endswith(p) for p in ['.', '!', '?']):
+                    caption = f"{caption}."
+
+                max_caption_len = 175 if story_url else 280
+                caption = caption[:max_caption_len]
+
+            except Exception as e:
+                logger.warning(f"Caption generation failed: {e}")
+                caption = f"Explaining: {topic[:100]}"
+
+            # Generate infographic prompt for Imagen
+            infographic_visual_prompt = f"""Professional tech infographic about "{topic}".
+
+Key concepts to visualize: {', '.join(key_points)}
+
+Style: Clean, modern data visualization diagram
+Color scheme: Professional blue and white with accent colors
+Visual elements: Charts, diagrams, icons, connecting lines
+
+Requirements:
+- Educational and informative
+- High contrast, readable at small sizes
+- Minimalist tech aesthetic
+- 16:9 aspect ratio for Twitter/X
+- No text clutter, visual explanation"""
+
+            # Add URL to caption if available
+            if story_url:
+                if len(caption) + len(story_url) + 4 <= 280:
+                    caption = f"{caption}\n\n{story_url}"
+                else:
+                    max_cap_len = 280 - len(story_url) - 7
+                    caption = f"{caption[:max_cap_len]}...\n\n{story_url}"
+                logger.info(f"Added URL to infographic caption: {story_url}")
+
+            strategy["content"] = caption
+            strategy["image_prompt"] = infographic_visual_prompt
+            strategy["key_points"] = key_points
 
         else:
             # Generate Hacker News Style Post with REAL URL
