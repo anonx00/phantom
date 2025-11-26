@@ -382,30 +382,58 @@ class AgentBrain:
 
         Daily limits (to control Vertex AI costs):
         - VIDEO: 1 per day max ($0.50+ each)
-        - IMAGE/INFOGRAPHIC/MEME: 3 per day combined ($0.01-0.05 each)
-        - TEXT: unlimited (free)
+        - IMAGE/INFOGRAPHIC/MEME: 5 per day combined ($0.01-0.05 each)
         """
-        DAILY_LIMITS = {
-            'video': 1,           # Very expensive - Veo 2
-            'image': 3,           # Imagen - moderate cost
-            'infographic': 3,     # Uses Imagen
-            'meme': 3,            # Uses Imagen
-        }
-
         usage = self._get_daily_media_usage()
 
-        # Check video budget
+        # Video limit: 1 per day
         if desired_type == 'video':
-            if usage['video'] >= DAILY_LIMITS['video']:
-                return False, 'text', f"Video budget exhausted ({usage['video']}/{DAILY_LIMITS['video']} today)"
+            if usage.get('video', 0) >= 1:
+                return (False, 'text', f"Video budget exhausted ({usage['video']}/1 today)")
+            return (True, 'video', f"Video OK ({usage['video']}/1 today)")
 
-        # Check image budget (combined for image/infographic/meme)
-        if desired_type in ['image', 'infographic', 'meme']:
-            image_total = usage['image'] + usage['infographic'] + usage['meme']
-            if image_total >= DAILY_LIMITS['image']:
-                return False, 'text', f"Image budget exhausted ({image_total}/{DAILY_LIMITS['image']} today)"
+        # Image types limit: 5 per day combined (increased from 3)
+        image_count = usage.get('image', 0) + usage.get('infographic', 0) + usage.get('meme', 0)
+        if image_count >= 5:
+            return (False, 'text', f"Image budget exhausted ({image_count}/5 today)")
 
-        return True, desired_type, "Within budget"
+        return (True, desired_type, f"Image budget OK ({image_count}/5 today)")
+
+    def _should_use_media_for_story(self, topic: str, context: str, recommended_format: str, confidence: str, is_trending: bool) -> bool:
+        """
+        AI decides if this specific story is worth using media budget.
+        Prevents wasting budget on mediocre content.
+        """
+        # Always use media for HIGH confidence + trending
+        if confidence == 'HIGH' and is_trending:
+            logger.info("✓ Story is HIGH confidence + trending - using media")
+            return True
+
+        # For MEDIUM/LOW confidence, ask AI if worth it
+        prompt = f"""Should we use our LIMITED media budget (images/videos cost money) for this story?
+
+STORY: {topic}
+AI RECOMMENDED: {recommended_format}
+CONFIDENCE: {confidence}
+IS TRENDING: {'Yes' if is_trending else 'No'}
+
+We can only generate 5 images/memes and 1 video per day. Should we use budget on THIS story, or save it for something better?
+
+Consider:
+- Is this story IMPORTANT enough for visual content?
+- Will a TEXT post with link preview work just as well?
+- Is this story likely to get engagement even without media?
+
+Answer ONLY: USE_MEDIA or SAVE_BUDGET"""
+
+        try:
+            response = self._generate_with_fallback(prompt).strip().upper()
+            use_media = 'USE_MEDIA' in response
+            logger.info(f"AI budget decision: {'USE_MEDIA' if use_media else 'SAVE_BUDGET'} for {topic[:40]}...")
+            return use_media
+        except Exception as e:
+            logger.warning(f"Budget decision failed: {e}, defaulting to save")
+            return False
 
     def should_post_now(self) -> tuple:
         """
@@ -1131,14 +1159,22 @@ SUGGESTED_HASHTAGS: <2-3 relevant hashtags or "none">
                 logger.info(f"Research: {research_result['format']} ({research_result.get('confidence', 'N/A')}) - {research_result.get('reasoning', '')[:60]}")
 
                 post_type = research_result['format'].lower()
+                confidence = research_result.get('confidence', 'LOW')
+                is_trending = research_result.get('is_trending', False)
 
                 # Budget check for non-text formats
                 if post_type != 'text':
                     allowed, _, budget_reason = self._check_media_budget(post_type)
                     if not allowed:
                         logger.warning(f"💰 {budget_reason} - research suggested {post_type} but budget exhausted")
-                        # Don't fallback to junk - just use text with URL
                         post_type = "text"
+                    else:
+                        # AI second look: Is this story worth the media budget?
+                        if not self._should_use_media_for_story(
+                            topic, story_context, post_type, confidence, is_trending
+                        ):
+                            logger.info(f"🧠 AI decided to save budget - text is sufficient for this story")
+                            post_type = "text"
             else:
                 # No researcher available - use simple URL-based logic
                 post_type = "text" if story_url else "infographic"
