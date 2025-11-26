@@ -1140,45 +1140,55 @@ SUGGESTED_HASHTAGS: <2-3 relevant hashtags or "none">
         logger.info(f"Selected Topic: {topic}")
         logger.info(f"Article Context: {story_context[:150]}...")
 
-        # AGENTIC FORMAT DECISION: Research first, then decide
+        # COST-EFFICIENT FORMAT DECISION
+        # Check budget FIRST before spending on research (saves API calls)
         if Config.BUDGET_MODE:
             logger.info("BUDGET_MODE enabled, using text-only format")
             post_type = "text"
             research_result = {'format': 'TEXT', 'style_notes': '', 'reasoning': 'Budget mode'}
         else:
-            # Use ContentResearcher for intelligent format decision
-            research_result = {'format': 'TEXT', 'style_notes': '', 'reasoning': 'Default'}
+            # EARLY BUDGET CHECK - skip expensive research if no budget
+            usage = self._get_daily_media_usage()
+            image_count = usage.get('image', 0) + usage.get('infographic', 0) + usage.get('meme', 0)
 
-            if self.content_researcher:
-                logger.info("🔬 Researching best content format...")
-                research_result = self.content_researcher.research_topic(
-                    topic=topic,
-                    context=story_context,
-                    category=story.get('category', 'tech')
-                )
-                logger.info(f"Research: {research_result['format']} ({research_result.get('confidence', 'N/A')}) - {research_result.get('reasoning', '')[:60]}")
-
-                post_type = research_result['format'].lower()
-                confidence = research_result.get('confidence', 'LOW')
-                is_trending = research_result.get('is_trending', False)
-
-                # Budget check for non-text formats
-                if post_type != 'text':
-                    allowed, _, budget_reason = self._check_media_budget(post_type)
-                    if not allowed:
-                        logger.warning(f"💰 {budget_reason} - research suggested {post_type} but budget exhausted")
-                        post_type = "text"
-                    else:
-                        # AI second look: Is this story worth the media budget?
-                        if not self._should_use_media_for_story(
-                            topic, story_context, post_type, confidence, is_trending
-                        ):
-                            logger.info(f"🧠 AI decided to save budget - text is sufficient for this story")
-                            post_type = "text"
+            if image_count >= 5:
+                # No media budget - just use text (skip research to save AI calls)
+                logger.info(f"💰 Media budget exhausted ({image_count}/5) - using text (saved research API call)")
+                post_type = "text"
+                research_result = {'format': 'TEXT', 'style_notes': '', 'reasoning': 'Budget exhausted'}
             else:
-                # No researcher available - use simple URL-based logic
-                post_type = "text" if story_url else "infographic"
-                logger.info(f"No researcher - using {'text (has URL)' if story_url else 'infographic (no URL)'}")
+                # We have budget - do ONE efficient research call
+                research_result = {'format': 'TEXT', 'style_notes': '', 'reasoning': 'Default'}
+
+                if self.content_researcher:
+                    logger.info("🔬 Researching best content format...")
+                    research_result = self.content_researcher.research_topic(
+                        topic=topic,
+                        context=story_context,
+                        category=story.get('category', 'tech')
+                    )
+                    logger.info(f"Research: {research_result['format']} ({research_result.get('confidence', 'N/A')})")
+
+                    post_type = research_result['format'].lower()
+                    confidence = research_result.get('confidence', 'LOW')
+                    is_trending = research_result.get('is_trending', False)
+
+                    # For media types, check if worth it (combined into single decision)
+                    if post_type != 'text':
+                        # HIGH confidence + trending = always use media (no extra AI call)
+                        if confidence == 'HIGH' and is_trending:
+                            logger.info("✓ HIGH confidence + trending - using media")
+                        elif confidence == 'HIGH' or is_trending:
+                            # Good enough - use media
+                            logger.info(f"✓ {confidence} confidence, trending={is_trending} - using media")
+                        else:
+                            # LOW/MEDIUM confidence + not trending = save budget, use text
+                            logger.info(f"🧠 LOW confidence, not trending - saving budget, using text")
+                            post_type = "text"
+                else:
+                    # No researcher - simple logic (no API call)
+                    post_type = "text" if story_url else "infographic"
+                    logger.info(f"No researcher - using {'text' if story_url else 'infographic'}")
 
             logger.info(f"Selected post type: {post_type}")
 
