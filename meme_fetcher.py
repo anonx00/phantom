@@ -481,61 +481,13 @@ SUGGESTED_CAPTION: <witty caption if approved, "N/A" if not>
             logger.error(f"Meme validation failed: {e}")
             return {'approved': False, 'reason': str(e), 'suggested_caption': ''}
 
-    def validate_prompt(self, prompt_type: str, prompt_text: str, topic: str) -> Dict:
-        """
-        AI validates if a generation prompt makes sense before using it.
-        Prevents wasting API calls on bad prompts.
-        """
-        validation_prompt = f"""Evaluate this {prompt_type} generation prompt.
-
-PROMPT TO EVALUATE:
-"{prompt_text}"
-
-TOPIC CONTEXT: {topic}
-
-CHECK:
-1. Is it SPECIFIC enough? (Not vague like "cool tech stuff")
-2. Is it ACHIEVABLE? (AI can actually generate this)
-3. Is it RELEVANT? (Matches the topic)
-4. Is it PROFESSIONAL? (Appropriate for business account)
-
-Respond EXACTLY:
-VALID: YES or NO
-ISSUES: <list any problems, or "None">
-IMPROVED_PROMPT: <better version if needed, or "N/A" if already good>
-"""
-
-        try:
-            response = self.generate(validation_prompt)
-
-            valid = 'VALID: YES' in response.upper()
-            issues = ''
-            improved = ''
-
-            if 'ISSUES:' in response:
-                issues = response.split('ISSUES:')[1].split('\n')[0].strip()
-
-            if 'IMPROVED_PROMPT:' in response:
-                improved = response.split('IMPROVED_PROMPT:')[1].split('\n')[0].strip()
-                if improved.upper() == 'N/A':
-                    improved = prompt_text
-
-            return {
-                'valid': valid,
-                'issues': issues,
-                'improved_prompt': improved if improved else prompt_text
-            }
-
-        except Exception as e:
-            logger.error(f"Prompt validation failed: {e}")
-            return {'valid': True, 'issues': '', 'improved_prompt': prompt_text}
-
     def generate_video_prompt(self, topic: str, context: str, style_notes: str) -> Optional[str]:
         """
-        Generate and validate a video prompt.
+        Generate a video prompt with built-in self-validation (single AI call).
         Returns validated prompt or None if can't create good one.
         """
-        prompt = f"""Create a VIDEO generation prompt for this topic.
+        # Combined generation + validation in ONE call to save API costs
+        prompt = f"""Create a VIDEO generation prompt for this topic. Self-validate before responding.
 
 TOPIC: {topic}
 CONTEXT: {context[:500]}
@@ -546,12 +498,23 @@ VIDEO STYLES THAT WORK:
 - Data visualization: 3D charts, floating numbers, clean aesthetic
 - Tech montage: Code flowing, circuits lighting up, futuristic UI
 
-Create a SPECIFIC, VISUAL prompt (100-200 chars) that Veo can actually generate.
+REQUIREMENTS (self-validate):
+1. SPECIFIC enough (not vague like "cool tech stuff")
+2. ACHIEVABLE by AI video generation
+3. RELEVANT to the topic
+4. PROFESSIONAL for business account
+5. 100-200 characters
+
+Only respond with the final prompt. If you can't create a good one, respond "CANNOT_GENERATE".
 
 VIDEO_PROMPT:"""
 
         try:
             response = self.generate(prompt)
+
+            if 'CANNOT_GENERATE' in response.upper():
+                logger.warning("AI could not generate valid video prompt")
+                return None
 
             if 'VIDEO_PROMPT:' in response:
                 video_prompt = response.split('VIDEO_PROMPT:')[1].strip()
@@ -565,12 +528,6 @@ VIDEO_PROMPT:"""
                 logger.warning(f"Video prompt too short: {video_prompt}")
                 return None
 
-            # Validate the prompt
-            validation = self.validate_prompt('video', video_prompt, topic)
-            if not validation['valid']:
-                logger.warning(f"Video prompt invalid: {validation['issues']}")
-                video_prompt = validation['improved_prompt']
-
             return video_prompt
 
         except Exception as e:
@@ -579,12 +536,13 @@ VIDEO_PROMPT:"""
 
     def generate_infographic_prompt(self, topic: str, context: str, key_points: List[str]) -> Optional[str]:
         """
-        Generate and validate an infographic prompt.
+        Generate an infographic prompt with built-in self-validation (single AI call).
         Returns validated prompt or None.
         """
         points_text = '\n'.join(f"- {p}" for p in key_points[:5])
 
-        prompt = f"""Create an INFOGRAPHIC image prompt for this topic.
+        # Combined generation + validation in ONE call to save API costs
+        prompt = f"""Create an INFOGRAPHIC image prompt for this topic. Self-validate before responding.
 
 TOPIC: {topic}
 KEY POINTS:
@@ -597,13 +555,22 @@ INFOGRAPHIC STYLES:
 - Stats: Big numbers with icons
 - Diagram: System architecture or concept map
 
-Create a SPECIFIC prompt (80-150 chars) for Imagen to generate.
-Focus on CLEAN, PROFESSIONAL, EDUCATIONAL visual.
+REQUIREMENTS (self-validate):
+1. SPECIFIC enough for image generation
+2. CLEAN, PROFESSIONAL, EDUCATIONAL style
+3. RELEVANT to topic and key points
+4. 80-150 characters
+
+Only respond with the final prompt. If you can't create a good one, respond "CANNOT_GENERATE".
 
 INFOGRAPHIC_PROMPT:"""
 
         try:
             response = self.generate(prompt)
+
+            if 'CANNOT_GENERATE' in response.upper():
+                logger.warning("AI could not generate valid infographic prompt")
+                return None
 
             if 'INFOGRAPHIC_PROMPT:' in response:
                 infographic_prompt = response.split('INFOGRAPHIC_PROMPT:')[1].strip()
@@ -615,11 +582,6 @@ INFOGRAPHIC_PROMPT:"""
             if len(infographic_prompt) < 30:
                 logger.warning(f"Infographic prompt too short")
                 return None
-
-            # Validate
-            validation = self.validate_prompt('infographic', infographic_prompt, topic)
-            if not validation['valid']:
-                infographic_prompt = validation['improved_prompt']
 
             return infographic_prompt
 
