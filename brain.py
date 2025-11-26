@@ -723,59 +723,87 @@ WHY: [impact/relevance to {target_audience}]
             'context': f"Topic: {topic_name}"
         }
 
-    def _ai_select_topic(self, preferred_categories: List[str] = None) -> dict:
+    def _ai_select_and_evaluate(self, preferred_categories: List[str] = None, budget_info: dict = None) -> tuple:
         """
-        BIG BOSS AI autonomously selects the best topic to comment on.
-        Fetches multiple stories and picks the most worthy one.
+        COMBINED: Select best topic AND evaluate in ONE AI call.
+        Returns (selected_story, evaluation_dict) - saves an API call.
         """
-        # Get multiple stories
         stories = self.news_fetcher.get_multiple_stories(count=5, preferred_categories=preferred_categories)
 
         if not stories:
-            logger.warning("No stories available for AI selection")
-            return self._get_trending_story(preferred_categories)
+            logger.warning("No stories available")
+            story = self._get_trending_story(preferred_categories)
+            return story, {'should_post': True, 'style_tip': '', 'reason': 'No alternatives'}
 
         if len(stories) == 1:
-            return stories[0]
+            return stories[0], {'should_post': True, 'style_tip': '', 'reason': 'Only option'}
 
-        # Build selection prompt
+        # Build story list
         story_list = "\n".join([
             f"{i+1}. [{s.get('category', 'tech').upper()}] {s['title']}"
             for i, s in enumerate(stories)
         ])
 
-        selection_prompt = f"""Pick the best story for a cynical tech Twitter account.
+        # Budget context for AI awareness
+        budget_ctx = ""
+        if budget_info:
+            budget_ctx = f"""
+BUDGET STATUS:
+- Videos today: {budget_info.get('video', 0)}/1
+- Images today: {budget_info.get('image', 0) + budget_info.get('infographic', 0) + budget_info.get('meme', 0)}/5
+- Prefer TEXT if budget tight, MEDIA if budget available"""
+
+        # COMBINED prompt: select + evaluate in ONE call
+        prompt = f"""You run a cynical tech Twitter account. Pick the best story AND evaluate it.
 
 STORIES:
 {story_list}
+{budget_ctx}
 
 PICK BASED ON:
 - Most interesting to devs/tech people
-- Has visual potential (for video/meme)
+- Has visual potential (meme/video worthy)
 - Trending or controversial = good
-- Avoid boring corporate announcements
+- Skip boring corporate fluff
 
-Respond with ONLY the number (1-{len(stories)})."""
+RESPOND EXACTLY:
+PICK: <number 1-{len(stories)}>
+POST: <YES or NO>
+REASON: <why this story, one line>
+STYLE: <tone suggestion for caption>
+FORMAT_HINT: <VIDEO/MEME/TEXT based on topic + budget>"""
 
         try:
-            response = self._generate_with_fallback(selection_prompt).strip()
-            # Extract number from response
-            import re
-            match = re.search(r'\d+', response)
-            if match:
-                idx = int(match.group()) - 1
-                if 0 <= idx < len(stories):
-                    selected = stories[idx]
-                    logger.info(f"🎖️ BIG BOSS selected: [{selected.get('category', 'tech').upper()}] {selected['title'][:50]}...")
-                    return selected
+            response = self._generate_with_fallback(prompt).strip()
 
-            # Fallback to first story if parsing fails
-            logger.warning(f"Could not parse AI selection '{response}', using first story")
-            return stories[0]
+            # Parse selection
+            import re
+            pick_match = re.search(r'PICK:\s*(\d+)', response)
+            idx = int(pick_match.group(1)) - 1 if pick_match else 0
+            idx = max(0, min(idx, len(stories) - 1))
+            selected = stories[idx]
+
+            # Parse evaluation
+            should_post = 'POST: YES' in response.upper() or 'POST:YES' in response.upper()
+            reason = re.search(r'REASON:\s*(.+?)(?:\n|$)', response)
+            style = re.search(r'STYLE:\s*(.+?)(?:\n|$)', response)
+            format_hint = re.search(r'FORMAT_HINT:\s*(.+?)(?:\n|$)', response)
+
+            evaluation = {
+                'should_post': should_post if 'POST:' in response.upper() else True,
+                'reason': reason.group(1).strip() if reason else 'Selected by AI',
+                'style_tip': style.group(1).strip() if style else '',
+                'format_hint': format_hint.group(1).strip().upper() if format_hint else 'TEXT'
+            }
+
+            logger.info(f"🎖️ AI selected #{idx+1}: {selected['title'][:50]}...")
+            logger.info(f"   Evaluation: {'✓ POST' if evaluation['should_post'] else '✗ SKIP'} | {evaluation.get('format_hint', 'TEXT')}")
+
+            return selected, evaluation
 
         except Exception as e:
-            logger.warning(f"AI topic selection failed: {e}, falling back to first story")
-            return stories[0]
+            logger.warning(f"AI selection failed: {e}, using first story")
+            return stories[0], {'should_post': True, 'style_tip': '', 'reason': 'Fallback'}
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _check_history(self, topic: str, url: str = None) -> bool:
@@ -1046,75 +1074,6 @@ Does it relate to actual topic "{topic}"? Are all claims real?
             logger.warning(f"Could not get trending insights: {e}")
             return {'has_data': False}
 
-    def _ai_evaluate_content(self, topic: str, story_context: str, trending_insights: dict) -> dict:
-        """
-        Uses AI to evaluate if content is worth posting based on trending analysis.
-        Returns decision and style recommendations.
-        """
-        if not self.models:
-            return {'should_post': True, 'reason': 'No AI available for evaluation'}
-
-        model = self.models.get(self.model_names[0])
-        if not model:
-            return {'should_post': True, 'reason': 'No model available'}
-
-        # Build context from trending insights
-        trending_context = ""
-        if trending_insights.get('has_data'):
-            trending_topics = trending_insights.get('trending_topics', [])
-            style = trending_insights.get('style_insights', {})
-            top_post = trending_insights.get('top_post', {})
-
-            trending_context = f"""
-CURRENT TRENDING ANALYSIS:
-- Hot topics on Twitter: {', '.join(trending_topics[:10]) if trending_topics else 'N/A'}
-- Top performing post style: ~{style.get('avg_length', 150)} chars, {'uses emojis' if style.get('emoji_usage', 0) > 0.3 else 'minimal emojis'}
-- Hashtag usage: {'common' if style.get('hashtag_usage', 0) > 0.3 else 'rare'}
-- Example high-engagement post: "{top_post.get('text', 'N/A')[:100]}..." ({top_post.get('engagement', 0)} engagement)
-"""
-
-        evaluation_prompt = f"""You are a social media strategist. Evaluate if this content is worth posting.
-
-PROPOSED CONTENT:
-Topic: {topic}
-Context: {story_context[:500]}
-
-{trending_context}
-
-EVALUATE:
-1. Is this topic timely and relevant? (trending or newsworthy)
-2. Does it align with what's getting engagement on Twitter?
-3. Would it interest tech/AI/crypto audience?
-
-Respond in this exact format:
-DECISION: POST or SKIP
-CONFIDENCE: HIGH/MEDIUM/LOW
-REASON: <one line reason>
-STYLE_TIP: <one line style recommendation based on trending analysis>
-SUGGESTED_HASHTAGS: <2-3 relevant hashtags or "none">
-"""
-
-        try:
-            response = model.generate_content(evaluation_prompt)
-            result_text = response.text.strip()
-
-            # Parse response
-            decision = 'POST' in result_text.upper().split('DECISION:')[1].split('\n')[0] if 'DECISION:' in result_text else True
-            reason = result_text.split('REASON:')[1].split('\n')[0].strip() if 'REASON:' in result_text else 'AI evaluation'
-            style_tip = result_text.split('STYLE_TIP:')[1].split('\n')[0].strip() if 'STYLE_TIP:' in result_text else ''
-            hashtags = result_text.split('SUGGESTED_HASHTAGS:')[1].split('\n')[0].strip() if 'SUGGESTED_HASHTAGS:' in result_text else ''
-
-            return {
-                'should_post': decision,
-                'reason': reason,
-                'style_tip': style_tip,
-                'hashtags': hashtags if hashtags.lower() != 'none' else '',
-                'trending_topics': trending_insights.get('trending_topics', [])
-            }
-        except Exception as e:
-            logger.warning(f"AI evaluation failed: {e}")
-            return {'should_post': True, 'reason': f'Evaluation failed: {e}'}
-
     def get_strategy(self):
         """
         Decides on the content strategy: Text (HN Style), Video (Veo), or Image (Imagen).
@@ -1138,44 +1097,38 @@ SUGGESTED_HASHTAGS: <2-3 relevant hashtags or "none">
     def _generate_strategy_with_validation(self, attempt: int = 0) -> dict:
         """
         Internal method to generate and validate a strategy.
-        Separated for retry logic. Uses AI to evaluate content based on trending analysis.
+        OPTIMIZED: Combined topic selection + evaluation in ONE AI call.
         """
-        # Get preferred categories based on recent post history (variety + balance)
+        # Get preferred categories based on recent post history
         preferred_categories = self._get_preferred_categories()
-        primary_category = preferred_categories[0] if preferred_categories else 'ai'
 
-        # Fetch trending insights from top influencers
-        trending_insights = self._get_trending_insights(primary_category)
-        if trending_insights.get('has_data'):
-            logger.info(f"Using trending insights: {trending_insights.get('recommendation', 'N/A')}")
+        # Get budget info for AI awareness (ONE Firestore call, reused)
+        usage = self._get_daily_media_usage()
 
-        # BIG BOSS AI autonomously selects the topic
-        logger.info("🎖️ BIG BOSS selecting intel to comment on...")
-        story = self._ai_select_topic(preferred_categories=preferred_categories)
+        # COMBINED: Select topic + evaluate in ONE AI call (saves API calls!)
+        logger.info("🎖️ AI selecting and evaluating content...")
+        story, ai_eval = self._ai_select_and_evaluate(
+            preferred_categories=preferred_categories,
+            budget_info=usage
+        )
+
         topic = story['title']
-        story_url = story.get('url')  # Real URL or None
-        story_context = story.get('context', f"Article: {topic}")  # Rich context from article
+        story_url = story.get('url')
+        story_context = story.get('context', f"Article: {topic}")
 
-        # AI-based content evaluation
-        ai_eval = self._ai_evaluate_content(topic, story_context, trending_insights)
+        # Handle AI skip recommendation
         if not ai_eval.get('should_post', True):
-            logger.info(f"AI recommends SKIP: {ai_eval.get('reason', 'No reason')}")
-            # Try to find better content
-            for retry in range(3):
-                story = self._get_trending_story(preferred_categories=preferred_categories)
-                topic = story['title']
-                story_url = story.get('url')
-                story_context = story.get('context', f"Article: {topic}")
-                ai_eval = self._ai_evaluate_content(topic, story_context, trending_insights)
-                if ai_eval.get('should_post', True):
-                    logger.info(f"AI approved alternate content: {ai_eval.get('reason', 'N/A')}")
-                    break
-            else:
-                logger.warning("AI rejected all alternatives, proceeding anyway")
+            logger.info(f"AI recommends SKIP: {ai_eval.get('reason', 'Low quality')}")
+            # Quick fallback - just get next story without re-evaluating
+            story = self._get_trending_story(preferred_categories=preferred_categories)
+            topic = story['title']
+            story_url = story.get('url')
+            story_context = story.get('context', f"Article: {topic}")
+            ai_eval['should_post'] = True  # Proceed with fallback
 
-        # Store AI recommendations for content generation
+        # Store AI recommendations for later use
         self._current_ai_eval = ai_eval
-        logger.info(f"AI style tip: {ai_eval.get('style_tip', 'N/A')}")
+        logger.info(f"AI style: {ai_eval.get('style_tip', 'N/A')} | Format hint: {ai_eval.get('format_hint', 'TEXT')}")
 
         # Retry logic for duplicates (check both topic AND URL)
         if self._check_history(topic, story_url):
@@ -1199,57 +1152,38 @@ SUGGESTED_HASHTAGS: <2-3 relevant hashtags or "none">
         logger.info(f"Selected Topic: {topic}")
         logger.info(f"Article Context: {story_context[:150]}...")
 
-        # COST-EFFICIENT FORMAT DECISION
-        # Check budget FIRST before spending on research (saves API calls)
+        # COST-EFFICIENT FORMAT DECISION (reuse usage from earlier - no duplicate call!)
+        image_count = usage.get('image', 0) + usage.get('infographic', 0) + usage.get('meme', 0)
+        video_count = usage.get('video', 0)
+
         if Config.BUDGET_MODE:
             logger.info("BUDGET_MODE enabled, using text-only format")
             post_type = "text"
             research_result = {'format': 'TEXT', 'style_notes': '', 'reasoning': 'Budget mode'}
+        elif image_count >= 5 and video_count >= 1:
+            # No media budget at all - skip research API call
+            logger.info(f"💰 Media budget exhausted - using text (saved API call)")
+            post_type = "text"
+            research_result = {'format': 'TEXT', 'style_notes': '', 'reasoning': 'Budget exhausted'}
         else:
-            # EARLY BUDGET CHECK - skip expensive research if no budget
-            usage = self._get_daily_media_usage()
-            image_count = usage.get('image', 0) + usage.get('infographic', 0) + usage.get('meme', 0)
+            # USE AI's format hint from combined call (saves another API call!)
+            format_hint = ai_eval.get('format_hint', 'TEXT').upper()
 
-            if image_count >= 5:
-                # No media budget - just use text (skip research to save AI calls)
-                logger.info(f"💰 Media budget exhausted ({image_count}/5) - using text (saved research API call)")
-                post_type = "text"
-                research_result = {'format': 'TEXT', 'style_notes': '', 'reasoning': 'Budget exhausted'}
-            else:
-                # We have budget - do ONE efficient research call
-                research_result = {'format': 'TEXT', 'style_notes': '', 'reasoning': 'Default'}
+            # Respect budget limits
+            if format_hint == 'VIDEO' and video_count >= 1:
+                format_hint = 'MEME' if image_count < 5 else 'TEXT'
+            if format_hint in ['MEME', 'INFOGRAPHIC'] and image_count >= 5:
+                format_hint = 'TEXT'
 
-                if self.content_researcher:
-                    logger.info("🔬 Researching best content format...")
-                    research_result = self.content_researcher.research_topic(
-                        topic=topic,
-                        context=story_context,
-                        category=story.get('category', 'tech')
-                    )
-                    logger.info(f"Research: {research_result['format']} ({research_result.get('confidence', 'N/A')})")
+            post_type = format_hint.lower()
+            research_result = {
+                'format': format_hint,
+                'style_notes': ai_eval.get('style_tip', ''),
+                'reasoning': ai_eval.get('reason', 'AI decision')
+            }
+            logger.info(f"📋 Using AI format hint: {format_hint} (saved research API call)")
 
-                    post_type = research_result['format'].lower()
-                    confidence = research_result.get('confidence', 'LOW')
-                    is_trending = research_result.get('is_trending', False)
-
-                    # For media types, check if worth it (combined into single decision)
-                    if post_type != 'text':
-                        # HIGH confidence + trending = always use media (no extra AI call)
-                        if confidence == 'HIGH' and is_trending:
-                            logger.info("✓ HIGH confidence + trending - using media")
-                        elif confidence == 'HIGH' or is_trending:
-                            # Good enough - use media
-                            logger.info(f"✓ {confidence} confidence, trending={is_trending} - using media")
-                        else:
-                            # LOW/MEDIUM confidence + not trending = save budget, use text
-                            logger.info(f"🧠 LOW confidence, not trending - saving budget, using text")
-                            post_type = "text"
-                else:
-                    # No researcher - simple logic (no API call)
-                    post_type = "text" if story_url else "infographic"
-                    logger.info(f"No researcher - using {'text' if story_url else 'infographic'}")
-
-            logger.info(f"Selected post type: {post_type}")
+        logger.info(f"Selected post type: {post_type}")
 
         strategy = {
             "topic": topic,
