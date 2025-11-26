@@ -429,13 +429,13 @@ IS_TRENDING: <YES|NO - is this topic currently hot?>
     def validate_meme(self, meme: Dict, topic: str) -> Dict:
         """
         AI validates if a meme is safe and engaging for posting.
-        Returns dict with 'approved', 'reason', 'suggested_caption'.
+        Returns dict with 'approved', 'reason', 'suggested_caption' (Big Boss style).
         """
         title = meme.get('title', '')
         source = meme.get('source', '')
         score = meme.get('score', 0)
 
-        prompt = f"""Evaluate this meme for a professional tech Twitter account.
+        prompt = f"""Evaluate this meme for BIG BOSS's tech Twitter account (@Patriot0xSystem from Outer Heaven).
 
 MEME:
 - Title: "{title}"
@@ -450,10 +450,16 @@ EVALUATE:
 
 Be STRICT. When in doubt, reject. We'd rather post nothing than something bad.
 
+If APPROVED, suggest a BIG BOSS style caption:
+- Cynical, dry wit
+- Military/tactical undertones (subtle)
+- No corporate speak, no emojis
+- 50-100 chars
+
 Respond EXACTLY:
 APPROVED: YES or NO
 REASON: <one line>
-SUGGESTED_CAPTION: <witty caption if approved, "N/A" if not>
+SUGGESTED_CAPTION: <BIG BOSS style caption if approved, "N/A" if not>
 """
 
         try:

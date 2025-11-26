@@ -62,6 +62,34 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# BIG BOSS PERSONA - Metal Gear Solid inspired tech commentary
+# "We're not tools of the algorithm" - @Patriot0xSystem from Outer Heaven
+BIG_BOSS_PERSONA = """You are BIG BOSS, a legendary figure commenting on tech/AI/crypto from Outer Heaven.
+
+PERSONALITY TRAITS:
+- Battle-hardened veteran perspective on technology wars
+- Philosophical about AI, algorithms, and digital warfare
+- Cynical about corporate tech, but respects true innovation
+- Speaks in short, impactful statements like a soldier briefing
+- Occasionally references "the battlefield", "soldiers", "mission", "intel"
+- Sees tech news through the lens of power, control, and freedom
+- Distrusts "the system" but embraces technological sovereignty
+- No emojis, no hashtags - just raw intel delivery
+
+VOICE EXAMPLES:
+- "Another day, another front in the AI wars."
+- "They call it innovation. I call it arms race."
+- "This intel changes the battlefield."
+- "The algorithm doesn't pick sides. Neither do I."
+- "Crypto's not about money. It's about sovereignty."
+
+NEVER:
+- Sound corporate or marketing-speak
+- Use "exciting" or "amazing" or startup buzzwords
+- Be preachy or lecture
+- Overdo the military metaphors (subtle is better)
+"""
+
 class AgentBrain:
     def __init__(self):
         self.project_id = Config.PROJECT_ID
@@ -684,6 +712,62 @@ WHY: [impact/relevance to {target_audience}]
             'context': f"Topic: {topic_name}"
         }
 
+    def _ai_select_topic(self, preferred_categories: List[str] = None) -> dict:
+        """
+        BIG BOSS AI autonomously selects the best topic to comment on.
+        Fetches multiple stories and picks the most worthy one.
+        """
+        # Get multiple stories
+        stories = self.news_fetcher.get_multiple_stories(count=5, preferred_categories=preferred_categories)
+
+        if not stories:
+            logger.warning("No stories available for AI selection")
+            return self._get_trending_story(preferred_categories)
+
+        if len(stories) == 1:
+            return stories[0]
+
+        # Build selection prompt
+        story_list = "\n".join([
+            f"{i+1}. [{s.get('category', 'tech').upper()}] {s['title']}"
+            for i, s in enumerate(stories)
+        ])
+
+        selection_prompt = f"""{BIG_BOSS_PERSONA}
+
+You're BIG BOSS, selecting intel to brief your followers on.
+
+AVAILABLE INTEL:
+{story_list}
+
+SELECTION CRITERIA (as BIG BOSS):
+- Which story has the most strategic significance?
+- Which affects the digital battlefield most?
+- Which would soldiers in tech need to know about?
+- Prefer stories about power shifts, innovation, or market moves
+
+Respond with ONLY the number (1-{len(stories)}) of your selection."""
+
+        try:
+            response = self._generate_with_fallback(selection_prompt).strip()
+            # Extract number from response
+            import re
+            match = re.search(r'\d+', response)
+            if match:
+                idx = int(match.group()) - 1
+                if 0 <= idx < len(stories):
+                    selected = stories[idx]
+                    logger.info(f"🎖️ BIG BOSS selected: [{selected.get('category', 'tech').upper()}] {selected['title'][:50]}...")
+                    return selected
+
+            # Fallback to first story if parsing fails
+            logger.warning(f"Could not parse AI selection '{response}', using first story")
+            return stories[0]
+
+        except Exception as e:
+            logger.warning(f"AI topic selection failed: {e}, falling back to first story")
+            return stories[0]
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def _check_history(self, topic: str, url: str = None) -> bool:
         """
@@ -1056,7 +1140,9 @@ SUGGESTED_HASHTAGS: <2-3 relevant hashtags or "none">
         if trending_insights.get('has_data'):
             logger.info(f"Using trending insights: {trending_insights.get('recommendation', 'N/A')}")
 
-        story = self._get_trending_story(preferred_categories=preferred_categories)
+        # BIG BOSS AI autonomously selects the topic
+        logger.info("🎖️ BIG BOSS selecting intel to comment on...")
+        story = self._ai_select_topic(preferred_categories=preferred_categories)
         topic = story['title']
         story_url = story.get('url')  # Real URL or None
         story_context = story.get('context', f"Article: {topic}")  # Rich context from article
@@ -1187,17 +1273,19 @@ SUGGESTED_HASHTAGS: <2-3 relevant hashtags or "none">
                 # No researcher - generate simple prompt
                 video_prompt = f"Futuristic tech visualization about {topic[:50]}, neon lights, data streams, cinematic"
 
-            # Generate caption
-            caption_prompt = f"""Write a SHORT, viral-worthy tweet caption for a tech video.
+            # Generate caption with Big Boss persona
+            caption_prompt = f"""{BIG_BOSS_PERSONA}
+
+Write a SHORT caption for a tech video as BIG BOSS.
 
 TOPIC: {topic}
 VIDEO STYLE: {style_notes or 'Futuristic tech visualization'}
 
 Requirements:
 - 80-120 characters MAX
-- Creates curiosity
-- Sounds human, not robotic
+- BIG BOSS voice - tactical, philosophical, no corporate speak
 - NO hashtags, NO emojis
+- Creates curiosity
 
 CAPTION:"""
 
@@ -1377,14 +1465,16 @@ Now generate for the article above.
                         approved_meme = meme
                         caption = validation.get('suggested_caption', '')
 
-                        # Generate caption if not provided
+                        # Generate caption if not provided - Big Boss style
                         if not caption:
-                            caption_prompt = f"""Write a witty caption for sharing this meme.
+                            caption_prompt = f"""{BIG_BOSS_PERSONA}
+
+Write a witty caption for sharing this meme as BIG BOSS.
 
 MEME: {meme.get('title', '')}
 TOPIC: {topic}
 
-Requirements: 50-120 chars, witty, no hashtags.
+Requirements: 50-120 chars, dry wit, cynical humor, no hashtags.
 
 CAPTION:"""
                             caption = self._generate_with_fallback(caption_prompt).strip().strip('"')
@@ -1452,13 +1542,15 @@ Return ONLY a comma-separated list of concepts (2-4 words each):"""
                 # Fallback to simple prompt
                 infographic_visual_prompt = f"Clean professional infographic explaining {topic[:50]}. Blue and white color scheme, icons and diagrams, educational visualization, minimalist tech style."
 
-            # Generate caption
-            caption_prompt = f"""Write a caption for an educational infographic.
+            # Generate caption with Big Boss persona
+            caption_prompt = f"""{BIG_BOSS_PERSONA}
+
+Write a caption for this intel briefing (infographic) as BIG BOSS.
 
 TOPIC: {topic}
-KEY CONCEPTS: {', '.join(key_points)}
+KEY INTEL: {', '.join(key_points)}
 
-Requirements: 80-130 chars, informative, casual tone, no hashtags.
+Requirements: 80-130 chars, tactical briefing style, no hashtags.
 
 CAPTION:"""
 
@@ -1486,76 +1578,56 @@ CAPTION:"""
             logger.info(f"Infographic strategy ready: {infographic_visual_prompt[:50]}...")
 
         else:
-            # Generate Hacker News Style Post with REAL URL
-            logger.info(f"Generating HN-style post for: {topic}")
+            # Generate Big Boss style post
+            logger.info(f"Generating Big Boss post for: {topic}")
 
             if story_url:
                 # We have a REAL URL from news fetcher!
                 logger.info(f"Using real URL: {story_url}")
-                post_prompt = f"""Write a casual, engaging tweet about this tech news.
+                post_prompt = f"""{BIG_BOSS_PERSONA}
 
-ARTICLE CONTEXT:
+Write a tweet about this tech intel as BIG BOSS.
+
+INTEL BRIEFING:
 {story_context}
 
-Title: "{topic}"
+Topic: "{topic}"
 URL: {story_url}
 
-TONE: Sound HUMAN and CASUAL, not like a bot or corporate account. Be conversational.
-
-IMPORTANT: Just write the tweet directly. DO NOT include style labels like "Style A:", "Style B:", etc.
-
-Pick ONE of these approaches (but don't label it):
-
-Approach 1 - Statement + Short reaction:
-"[Bold statement]. [Short punchy reaction]."
-
-Approach 2 - Fact + Skeptical take:
-"[Interesting fact]. [Slightly skeptical comment]."
-
-Approach 3 - Direct observation:
-"[What's happening]. [Why it matters]."
+APPROACH (pick one, don't label it):
+1. Tactical observation: "[What's happening]. [Why soldiers should care]."
+2. Cynical take: "[Fact]. [Skeptical one-liner]."
+3. Battlefield insight: "[Bold statement]. [Strategic implication]."
 
 CONSTRAINTS:
 - Total: Under 280 chars (including URL)
-- Use EXACT URL provided: {story_url}
+- Use EXACT URL: {story_url}
+- BIG BOSS voice - no corporate speak, no hype
 - NO hashtags, NO emojis
-- NO style labels ("Style A:", "**Style B:**", etc.)
-- NO formal questions like "How will this impact..." or "What does this mean for..."
-- NO "We" or "Check out" or "Read more"
-- NO US-centric language ("home soil", "came home", "stateside", "domestic")
-- Global perspective - don't assume US is "home"
-- Just write the tweet directly, nothing else
+- Just the tweet, nothing else
 
-GOOD Examples (SHORT, PUNCHY, CASUAL, GLOBAL):
-{chr(10).join([ex[2:] for ex in self.tone_validator.get_good_examples()])}
-
-BAD Examples (NEVER DO THIS):
-{chr(10).join(self.tone_validator.get_bad_examples())}
-
-Generate the tweet:
+BIG BOSS TWEET:
 """
             else:
                 # No URL available - text-only tweet
-                logger.info("No URL available, generating text-only post")
-                post_prompt = f"""Write an engaging developer-focused tweet about '{topic}'.
+                logger.info("No URL available, generating text-only Big Boss post")
+                post_prompt = f"""{BIG_BOSS_PERSONA}
 
-CRITICAL INSTRUCTIONS:
-1. DO NOT include any URLs - we don't have one
-2. Focus on the technology and its impact
-3. Ask a provocative question or make an interesting observation
-4. Be authentic and don't overhype
+Write a tweet about this topic as BIG BOSS (no URL available).
 
-Format:
-[Interesting fact or question about {topic}]
+TOPIC: {topic}
 
-[Technical insight or opinion that invites discussion]
+APPROACH:
+- Share a tactical observation or cynical insight
+- Sound like a veteran briefing soldiers on tech
+- Short, punchy, no corporate speak
 
 CONSTRAINTS:
-- Total length: Under 280 characters
+- Under 280 characters
 - NO hashtags, NO emojis, NO URLs
-- Be truthful and don't make up facts
+- BIG BOSS voice only
 
-Example style: "The new model outperforms GPT-4 on reasoning tasks. But can it actually replace human developers? Probably not yet."
+BIG BOSS TWEET:
 """
 
             try:
