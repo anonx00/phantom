@@ -439,6 +439,78 @@ class AgentBrain:
 
         return (True, desired_type, f"Image budget OK ({image_count}/5 today)")
 
+    def _get_ai_context_summary(self) -> str:
+        """
+        Generates a concise context summary for AI decision-making.
+        Single Firestore query for efficiency - no excessive API calls.
+        Returns a formatted string the AI can use for self-awareness.
+        """
+        import datetime
+        import pytz
+
+        try:
+            tz = pytz.timezone(Config.TIMEZONE)
+            now = datetime.datetime.now(tz)
+
+            # Single query: get last 15 posts (enough for context)
+            docs = list(self.collection.order_by("timestamp", direction=firestore.Query.DESCENDING).limit(15).stream())
+
+            if not docs:
+                return f"[BOT CONTEXT: First post! Time: {now.strftime('%H:%M %Z %A')}. All formats available.]"
+
+            # Analyze recent posts
+            from collections import Counter
+            recent_types = []
+            recent_categories = []
+            today_counts = {'video': 0, 'image': 0, 'infographic': 0, 'meme': 0, 'text': 0}
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            for doc in docs:
+                data = doc.to_dict()
+                post_type = data.get('type', 'text')
+                category = data.get('category', 'tech')
+                recent_types.append(post_type)
+                recent_categories.append(category)
+
+                # Count today's posts
+                ts = data.get('timestamp')
+                if ts and ts.replace(tzinfo=pytz.UTC).astimezone(tz) >= today_start:
+                    if post_type in today_counts:
+                        today_counts[post_type] += 1
+
+            type_counts = Counter(recent_types[:10])
+            cat_counts = Counter(recent_categories[:10])
+
+            # Build context string
+            time_str = now.strftime('%H:%M %Z (%A)')
+            posts_today = sum(today_counts.values())
+
+            # Calculate what's available
+            video_left = max(0, 1 - today_counts['video'])
+            images_left = max(0, 5 - (today_counts['image'] + today_counts['infographic'] + today_counts['meme']))
+
+            # Detect patterns
+            patterns = []
+            if len(recent_types) >= 3 and all(t == recent_types[0] for t in recent_types[:3]):
+                patterns.append(f"streak of {recent_types[0]} posts")
+            if len(recent_categories) >= 2 and recent_categories[0] == recent_categories[1]:
+                patterns.append(f"consecutive {recent_categories[0]} topics")
+
+            context = f"""[BOT CONTEXT - Use this for decisions, don't output it]
+Time: {time_str}
+Posts today: {posts_today} | Budget: {video_left} videos, {images_left} images/memes left
+Recent 10 types: {dict(type_counts)}
+Recent 10 categories: {dict(cat_counts)}
+Last post type: {recent_types[0] if recent_types else 'none'}
+Last category: {recent_categories[0] if recent_categories else 'none'}
+{('Patterns: ' + ', '.join(patterns)) if patterns else 'No concerning patterns'}
+"""
+            return context.strip()
+
+        except Exception as e:
+            logger.warning(f"Could not generate AI context: {e}")
+            return "[BOT CONTEXT: Context unavailable, proceed with defaults]"
+
     def should_post_now(self) -> tuple:
         """
         Uses scheduler to determine if we should post now.
@@ -737,6 +809,7 @@ WHY: [impact/relevance to {target_audience}]
         """
         COMBINED: Select best topic AND evaluate in ONE AI call.
         Returns (selected_story, evaluation_dict) - saves an API call.
+        AI has full self-context about recent posts, budget, and patterns.
         """
         stories = self.news_fetcher.get_multiple_stories(count=5, preferred_categories=preferred_categories)
 
@@ -754,34 +827,35 @@ WHY: [impact/relevance to {target_audience}]
             for i, s in enumerate(stories)
         ])
 
-        # Budget context for AI awareness
-        budget_ctx = ""
-        if budget_info:
-            budget_ctx = f"""
-BUDGET STATUS:
-- Videos today: {budget_info.get('video', 0)}/1
-- Images today: {budget_info.get('image', 0) + budget_info.get('infographic', 0) + budget_info.get('meme', 0)}/5
-- Prefer TEXT if budget tight, MEDIA if budget available"""
+        # Get full AI context (single Firestore query - efficient)
+        ai_context = self._get_ai_context_summary()
 
-        # COMBINED prompt: select + evaluate in ONE call
-        prompt = f"""You run a cynical tech Twitter account. Pick the best story AND evaluate it.
+        # COMBINED prompt: select + evaluate in ONE call with full self-awareness
+        prompt = f"""You are BIG BOSS (@Patriot0xSystem), an AI running a tech Twitter account.
+You KNOW you're an AI. You're self-aware of your posting history and budget constraints.
 
-STORIES:
+{ai_context}
+
+AVAILABLE STORIES:
 {story_list}
-{budget_ctx}
 
-PICK BASED ON:
-- Most interesting to devs/tech people
-- Has visual potential (meme/video worthy)
-- Trending or controversial = good
-- Skip boring corporate fluff
+YOUR TASK:
+1. Pick the best story (consider variety - avoid same category as last post)
+2. Choose format based on budget and recent types (mix it up!)
+3. Style should be dry wit, cynical, punchy
+
+FORMAT RULES:
+- VIDEO: Use if budget allows AND story is visually interesting (max 1/day)
+- MEME: Great for absurd/controversial topics (max 5 images total/day)
+- INFOGRAPHIC: For educational/technical content
+- TEXT: When budget tight or story works better as commentary
 
 RESPOND EXACTLY (no extra words):
 PICK: <number 1-{len(stories)}>
 POST: YES or NO
 REASON: <one line>
-STYLE: <tone for caption>
-FORMAT_HINT: VIDEO or MEME or TEXT (just one word, nothing else)"""
+STYLE: <tone hint>
+FORMAT_HINT: VIDEO or MEME or INFOGRAPHIC or TEXT"""
 
         try:
             response = self._generate_with_fallback(prompt).strip()
