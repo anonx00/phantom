@@ -117,62 +117,79 @@ resource "google_firestore_database" "phantom_db" {
 }
 
 # ============================================================================
-# Secret Manager Secrets (structure only - values set manually)
+# Secret Manager - Reference EXISTING secrets (don't create new ones)
+# Secrets are expected to already exist in the project
 # ============================================================================
 
-resource "google_secret_manager_secret" "twitter_secrets" {
-  for_each = toset([
-    "TWITTER_CONSUMER_KEY",
-    "TWITTER_CONSUMER_SECRET",
-    "TWITTER_ACCESS_TOKEN",
-    "TWITTER_ACCESS_TOKEN_SECRET",
-  ])
-
+# Data sources to reference existing secrets
+data "google_secret_manager_secret" "twitter_consumer_key" {
   project   = var.project_id
-  secret_id = each.key
-
-  replication {
-    auto {}
-  }
-
+  secret_id = "TWITTER_CONSUMER_KEY"
   depends_on = [google_project_service.required_apis["secretmanager.googleapis.com"]]
 }
 
-# Optional: Bearer token for advanced features
-resource "google_secret_manager_secret" "twitter_bearer" {
+data "google_secret_manager_secret" "twitter_consumer_secret" {
+  project   = var.project_id
+  secret_id = "TWITTER_CONSUMER_SECRET"
+  depends_on = [google_project_service.required_apis["secretmanager.googleapis.com"]]
+}
+
+data "google_secret_manager_secret" "twitter_access_token" {
+  project   = var.project_id
+  secret_id = "TWITTER_ACCESS_TOKEN"
+  depends_on = [google_project_service.required_apis["secretmanager.googleapis.com"]]
+}
+
+data "google_secret_manager_secret" "twitter_access_token_secret" {
+  project   = var.project_id
+  secret_id = "TWITTER_ACCESS_TOKEN_SECRET"
+  depends_on = [google_project_service.required_apis["secretmanager.googleapis.com"]]
+}
+
+data "google_secret_manager_secret" "twitter_bearer_token" {
   project   = var.project_id
   secret_id = "TWITTER_BEARER_TOKEN"
-
-  replication {
-    auto {}
-  }
-
   depends_on = [google_project_service.required_apis["secretmanager.googleapis.com"]]
-
-  lifecycle {
-    # This secret is optional
-    ignore_changes = all
-  }
 }
 
-# Grant service account access to secrets
-resource "google_secret_manager_secret_iam_member" "secret_access" {
-  for_each = google_secret_manager_secret.twitter_secrets
-
+# Grant service account access to existing secrets
+resource "google_secret_manager_secret_iam_member" "consumer_key_access" {
   project   = var.project_id
-  secret_id = each.value.secret_id
+  secret_id = data.google_secret_manager_secret.twitter_consumer_key.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.phantom_sa.email}"
-
   depends_on = [google_service_account.phantom_sa]
 }
 
-resource "google_secret_manager_secret_iam_member" "bearer_access" {
+resource "google_secret_manager_secret_iam_member" "consumer_secret_access" {
   project   = var.project_id
-  secret_id = google_secret_manager_secret.twitter_bearer.secret_id
+  secret_id = data.google_secret_manager_secret.twitter_consumer_secret.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.phantom_sa.email}"
+  depends_on = [google_service_account.phantom_sa]
+}
 
+resource "google_secret_manager_secret_iam_member" "access_token_access" {
+  project   = var.project_id
+  secret_id = data.google_secret_manager_secret.twitter_access_token.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.phantom_sa.email}"
+  depends_on = [google_service_account.phantom_sa]
+}
+
+resource "google_secret_manager_secret_iam_member" "access_token_secret_access" {
+  project   = var.project_id
+  secret_id = data.google_secret_manager_secret.twitter_access_token_secret.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.phantom_sa.email}"
+  depends_on = [google_service_account.phantom_sa]
+}
+
+resource "google_secret_manager_secret_iam_member" "bearer_token_access" {
+  project   = var.project_id
+  secret_id = data.google_secret_manager_secret.twitter_bearer_token.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.phantom_sa.email}"
   depends_on = [google_service_account.phantom_sa]
 }
 
