@@ -1497,7 +1497,47 @@ Does it relate to actual topic "{topic}"? Are all claims real?
                 # IMAGE → MEME (we fetch images via meme sources)
                 format_hint = 'MEME' if 'IMAGE' in raw_hint else 'TEXT'
 
-            # Respect budget limits
+            # ====================================================================
+            # ENFORCE VARIETY - Override AI choice to ensure VIDEO/INFOGRAPHIC
+            # ====================================================================
+            recent_types = self._get_recent_post_types(10)
+            recent_videos = sum(1 for t in recent_types if t == 'video')
+            recent_infographics = sum(1 for t in recent_types if t == 'infographic')
+            recent_memes = sum(1 for t in recent_types if t == 'meme')
+
+            # RULE 1: If no video in last 10 posts AND budget allows, FORCE VIDEO
+            if video_count == 0 and recent_videos == 0 and format_hint != 'VIDEO':
+                topic_lower = topic.lower()
+                # Check if topic is visually interesting
+                visual_keywords = ['launch', 'release', 'new', 'update', 'announce', 'reveal',
+                                 'bitcoin', 'crypto', 'ai', 'gemini', 'gpt', 'model', 'chip']
+                if any(kw in topic_lower for kw in visual_keywords):
+                    logger.info(f"🎬 FORCING VIDEO - No videos in last 10 posts, topic is visual")
+                    format_hint = 'VIDEO'
+
+            # RULE 2: If no infographic in last 10 posts AND image budget allows, suggest INFOGRAPHIC
+            elif image_count < 5 and recent_infographics == 0 and format_hint not in ['VIDEO', 'INFOGRAPHIC']:
+                topic_lower = topic.lower()
+                # Check if topic is educational
+                edu_keywords = ['how', 'what', 'why', 'compare', 'vs', 'versus', 'difference',
+                              'explained', 'guide', 'architecture', 'system', 'process']
+                if any(kw in topic_lower for kw in edu_keywords):
+                    logger.info(f"📊 FORCING INFOGRAPHIC - No infographics in last 10 posts, topic is educational")
+                    format_hint = 'INFOGRAPHIC'
+
+            # RULE 3: If too many memes (>50% of last 10), switch to VIDEO or TEXT
+            if recent_memes >= 5 and format_hint == 'MEME':
+                if video_count == 0:
+                    logger.info(f"🎬 Switching from MEME to VIDEO - Too many memes ({recent_memes}/10)")
+                    format_hint = 'VIDEO'
+                elif image_count < 5:
+                    logger.info(f"📊 Switching from MEME to INFOGRAPHIC - Too many memes ({recent_memes}/10)")
+                    format_hint = 'INFOGRAPHIC'
+                else:
+                    logger.info(f"📝 Switching from MEME to TEXT - Too many memes and budget exhausted")
+                    format_hint = 'TEXT'
+
+            # Respect budget limits (final check)
             if format_hint == 'VIDEO' and video_count >= 1:
                 format_hint = 'MEME' if image_count < 5 else 'TEXT'
             if format_hint in ['MEME', 'INFOGRAPHIC'] and image_count >= 5:
@@ -1509,7 +1549,7 @@ Does it relate to actual topic "{topic}"? Are all claims real?
                 'style_notes': ai_eval.get('style_tip', ''),
                 'reasoning': ai_eval.get('reason', 'AI decision')
             }
-            logger.info(f"📋 Using AI format hint: {format_hint} (saved research API call)")
+            logger.info(f"📋 Using format: {format_hint} (enforced variety rules)")
 
         logger.info(f"Selected post type: {post_type}")
 
