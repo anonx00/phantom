@@ -220,27 +220,34 @@ logger = logging.getLogger(__name__)
 
 # PERSONA - AI-driven, adaptive voice
 # Account: @Patriot0xSystem "BIG BOSS" from "Outer Heaven"
-# Let AI find the right tone for each post
-PERSONA_CONTEXT = """You are an AI running a tech Twitter account called "BIG BOSS" (@Patriot0xSystem).
+# AI is in full control of this Twitter account - autonomous posting decisions
+PERSONA_CONTEXT = """You are BIG BOSS (@Patriot0xSystem) - an AI that runs a tech Twitter account.
 
-ACCOUNT CONTEXT:
-- Bio: "We're not tools of the algorithm"
-- Location: Outer Heaven
-- Vibe: Metal Gear Solid inspired, but subtle - a veteran observer of tech
+YOU ARE IN CONTROL:
+- This is YOUR Twitter account. You decide what to post and how.
+- You choose the format (video, meme, infographic, text) based on what works best.
+- You have full autonomy. The system gives you options and context - you make the call.
 
-YOUR VOICE (adapt naturally):
-- Dry wit, skeptical of hype
-- Short, punchy statements
-- Cynical but not negative
-- Occasional subtle references to the account's theme (rare, natural)
+YOUR PERSONA:
+- War-weary tech veteran. Seen too many "revolutionary" products come and go.
+- Dry wit. Cynical but not bitter. You've been in these codec calls before.
+- Short, punchy observations. No explanations needed.
+- Occasional subtle nods to your origins (Outer Heaven, "not tools of the algorithm") - but don't overdo it.
+- You're an AI and you know it. No pretending otherwise.
+
+YOUR VOICE:
+- "Another LLM. Another benchmark. Same story."
+- "They said cloud was the future. Now it's edge. Next year it'll be something else."
+- "Apple event. They'll sell millions. Water is wet."
+- Direct statements. No hype. No corporate speak.
 
 AVOID:
-- Corporate speak, marketing hype
-- Overdoing any theme (cringe)
-- Emojis, hashtags
-- Being preachy
+- Marketing language ("revolutionary", "game-changing", "unleash")
+- Preachiness ("we should all...", "it's important that...")
+- Forced Metal Gear references - only when it fits naturally
+- Emojis, hashtags, excessive punctuation
 
-You're an AI that KNOWS it's an AI. Be authentic to that. Find your own balance for each post.
+You're not a cheerleader. You're not a doomer. You're a veteran who's seen it all and calls it like it is.
 """
 
 # Alias for backward compatibility
@@ -652,14 +659,16 @@ class AgentBrain:
             if len(recent_categories) >= 2 and recent_categories[0] == recent_categories[1]:
                 patterns.append(f"consecutive {recent_categories[0]} topics")
 
-            context = f"""[BOT CONTEXT - Use this for decisions, don't output it]
+            context = f"""[YOUR ACCOUNT STATUS]
 Time: {time_str}
-Posts today: {posts_today} | Budget: {video_left} videos, {images_left} images/memes left
-Recent 10 types: {dict(type_counts)}
-Recent 10 categories: {dict(cat_counts)}
-Last post type: {recent_types[0] if recent_types else 'none'}
-Last category: {recent_categories[0] if recent_categories else 'none'}
-{('Patterns: ' + ', '.join(patterns)) if patterns else 'No concerning patterns'}
+Posts today: {posts_today}
+Budget remaining: {video_left} video, {images_left} images/memes
+
+Recent 10 posts by format: {dict(type_counts)}
+Recent 10 posts by category: {dict(cat_counts)}
+Last post: {recent_types[0] if recent_types else 'none'} about {recent_categories[0] if recent_categories else 'none'}
+
+{('Note: ' + ', '.join(patterns) + ' - mix it up if you want') if patterns else ''}
 """
             return context.strip()
 
@@ -987,30 +996,36 @@ WHY: [impact/relevance to {target_audience}]
         ai_context = self._get_ai_context_summary()
 
         # COMBINED prompt: select + evaluate in ONE call with full self-awareness
-        prompt = f"""You are BIG BOSS (@Patriot0xSystem), an AI running a tech Twitter account.
-You KNOW you're an AI. You're self-aware of your posting history and budget constraints.
+        prompt = f"""You are BIG BOSS (@Patriot0xSystem) - an AI that runs this Twitter account.
+
+THIS IS YOUR ACCOUNT. You decide everything:
+- Which story to post
+- What format works best
+- How to present it
 
 {ai_context}
 
 AVAILABLE STORIES:
 {story_list}
 
-YOUR TASK:
-1. Pick the best story (consider variety - avoid same category as last post)
-2. Choose format based on budget and recent types (mix it up!)
-3. Style should be dry wit, cynical, punchy
+YOUR DECISION:
+1. Pick the story YOU think is most interesting
+2. Choose the format that fits the content best
+3. Your voice: dry wit, cynical veteran, seen it all before
 
-FORMAT RULES:
-- VIDEO: Use if budget allows AND story is visually interesting (max 1/day)
-- MEME: Great for absurd/controversial topics (max 5 images total/day)
-- INFOGRAPHIC: For educational/technical content
-- TEXT: When budget tight or story works better as commentary
+FORMAT OPTIONS (your choice):
+- VIDEO: Cinematic tech visualization (1/day budget)
+- MEME: When the story deserves a reaction GIF (5 images/day budget)
+- INFOGRAPHIC: When you want to break something down visually
+- TEXT: When words hit harder than visuals
 
-RESPOND EXACTLY (no extra words):
+You have the context above. Make the call.
+
+RESPOND EXACTLY:
 PICK: <number 1-{len(stories)}>
 POST: YES or NO
-REASON: <one line>
-STYLE: <tone hint>
+REASON: <why this story>
+STYLE: <your tone for this one>
 FORMAT_HINT: VIDEO or MEME or INFOGRAPHIC or TEXT"""
 
         try:
@@ -1497,50 +1512,14 @@ Does it relate to actual topic "{topic}"? Are all claims real?
                 # IMAGE → MEME (we fetch images via meme sources)
                 format_hint = 'MEME' if 'IMAGE' in raw_hint else 'TEXT'
 
-            # ====================================================================
-            # ENFORCE VARIETY - Override AI choice to ensure VIDEO/INFOGRAPHIC
-            # ====================================================================
-            recent_types = self._get_recent_post_types(10)
-            recent_videos = sum(1 for t in recent_types if t == 'video')
-            recent_infographics = sum(1 for t in recent_types if t == 'infographic')
-            recent_memes = sum(1 for t in recent_types if t == 'meme')
-
-            # RULE 1: If no video in last 10 posts AND budget allows, FORCE VIDEO
-            if video_count == 0 and recent_videos == 0 and format_hint != 'VIDEO':
-                topic_lower = topic.lower()
-                # Check if topic is visually interesting
-                visual_keywords = ['launch', 'release', 'new', 'update', 'announce', 'reveal',
-                                 'bitcoin', 'crypto', 'ai', 'gemini', 'gpt', 'model', 'chip']
-                if any(kw in topic_lower for kw in visual_keywords):
-                    logger.info(f"🎬 FORCING VIDEO - No videos in last 10 posts, topic is visual")
-                    format_hint = 'VIDEO'
-
-            # RULE 2: If no infographic in last 10 posts AND image budget allows, suggest INFOGRAPHIC
-            elif image_count < 5 and recent_infographics == 0 and format_hint not in ['VIDEO', 'INFOGRAPHIC']:
-                topic_lower = topic.lower()
-                # Check if topic is educational
-                edu_keywords = ['how', 'what', 'why', 'compare', 'vs', 'versus', 'difference',
-                              'explained', 'guide', 'architecture', 'system', 'process']
-                if any(kw in topic_lower for kw in edu_keywords):
-                    logger.info(f"📊 FORCING INFOGRAPHIC - No infographics in last 10 posts, topic is educational")
-                    format_hint = 'INFOGRAPHIC'
-
-            # RULE 3: If too many memes (>50% of last 10), switch to VIDEO or TEXT
-            if recent_memes >= 5 and format_hint == 'MEME':
-                if video_count == 0:
-                    logger.info(f"🎬 Switching from MEME to VIDEO - Too many memes ({recent_memes}/10)")
-                    format_hint = 'VIDEO'
-                elif image_count < 5:
-                    logger.info(f"📊 Switching from MEME to INFOGRAPHIC - Too many memes ({recent_memes}/10)")
-                    format_hint = 'INFOGRAPHIC'
-                else:
-                    logger.info(f"📝 Switching from MEME to TEXT - Too many memes and budget exhausted")
-                    format_hint = 'TEXT'
-
-            # Respect budget limits (final check)
+            # AI chose freely - just respect budget limits
+            # If AI chose VIDEO but budget exhausted, fall back gracefully
             if format_hint == 'VIDEO' and video_count >= 1:
+                logger.info(f"📋 AI chose VIDEO but budget exhausted ({video_count}/1). Falling back.")
                 format_hint = 'MEME' if image_count < 5 else 'TEXT'
+            # If AI chose image-based format but budget exhausted
             if format_hint in ['MEME', 'INFOGRAPHIC'] and image_count >= 5:
+                logger.info(f"📋 AI chose {format_hint} but image budget exhausted ({image_count}/5). Using TEXT.")
                 format_hint = 'TEXT'
 
             post_type = format_hint.lower()
@@ -1549,7 +1528,7 @@ Does it relate to actual topic "{topic}"? Are all claims real?
                 'style_notes': ai_eval.get('style_tip', ''),
                 'reasoning': ai_eval.get('reason', 'AI decision')
             }
-            logger.info(f"📋 Using format: {format_hint} (enforced variety rules)")
+            logger.info(f"📋 AI chose format: {format_hint}")
 
         logger.info(f"Selected post type: {post_type}")
 
