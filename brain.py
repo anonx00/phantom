@@ -1932,10 +1932,10 @@ CONTEXT:
 Topic: "{topic}"
 URL: {story_url}
 
-STYLE (pick one):
-1. "[Fact]. [Short reaction]."
-2. "[What happened]. [Cynical observation]."
-3. "[Bold statement]. [Why it matters]."
+STYLE EXAMPLES (write something SIMILAR, don't copy these literally):
+- "Another day, another data breach. Shocking."
+- "They raised $50M to do what Excel does. Incredible."
+- "The future is here. It costs $3000/month."
 
 RULES:
 - Under 280 chars total (including URL)
