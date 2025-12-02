@@ -1757,18 +1757,24 @@ Does it relate to actual topic "{topic}"? Are all claims real?
                 )
                 logger.info(f"Video prompt ready: {video_prompt[:80]}...")
             else:
-                # No researcher - use cinematic artistic fallbacks (NOT literal news visuals)
+                # No researcher - use PURE ART fallbacks (NO tech, NO news connection)
                 import random
                 cinematic_fallbacks = [
-                    "Slow push-in through layers of translucent geometric shapes, each layer glowing with different colors, particles floating in volumetric light rays, ethereal atmosphere, shallow depth of field, anamorphic",
-                    "Drone shot descending through clouds into a vast crystalline landscape, light refracting into rainbows, mist rolling across mirror-like surfaces, sunrise colors, cinematic and dreamlike",
-                    "Tracking shot following a single glowing orb traveling through infinite dark space, leaving trails of light, other orbs awakening as it passes, cosmic scale, anamorphic lens flare",
-                    "Close-up of liquid metal morphing and flowing, reflecting impossible architecture, camera slowly pulls back to reveal futuristic cityscape, chrome and neon, blade runner aesthetic",
-                    "Extreme slow motion of glass shattering into a thousand fragments, each piece catching light differently, camera orbits through the frozen explosion, dramatic rim lighting",
-                    "A lone silhouette stands at the edge of a vast digital ocean, waves made of glowing particles, camera slowly orbits as figure reaches toward the horizon, bioluminescent blue",
+                    # Abstract/Geometric
+                    "Slow dolly through infinite floating glass shards, each catching light differently, prismatic rainbows scattered everywhere, dust particles suspended in volumetric beams, ethereal and dreamlike, anamorphic lens",
+                    "Camera orbits a massive chrome sphere suspended in void, surface rippling like liquid mercury, reflections of unseen worlds, dramatic rim lighting, shallow depth of field",
+                    # Nature/Organic
+                    "Macro lens exploring dewdrops on spider silk at golden hour, light refracting into tiny rainbows, silk swaying gently, bokeh of morning forest behind, intimate and meditative",
+                    "Underwater ballet of bioluminescent jellyfish, tendrils trailing light through dark ocean, camera glides between them, particles floating like stars, serene and otherworldly",
+                    # Surreal/Dreamlike
+                    "Endless staircase ascending into clouds, impossible architecture in style of Escher, warm golden light streaming through gaps, figure climbing in silhouette, dreamlike atmosphere",
+                    "Giant clock face melting Dali-style over desert landscape, sand flowing like water around it, long shadows at sunset, time-lapse clouds, surreal and contemplative",
+                    # Cosmic/Scale
+                    "Camera pulls back from single grain of sand revealing entire beach, continues pulling back showing coastline then planet then solar system, sense of infinite scale, orchestral feeling",
+                    "Aurora borealis over frozen lake, ribbons of green light reflecting perfectly in still water, timelapse stars wheeling overhead, lone figure watching, awe and wonder",
                 ]
                 video_prompt = random.choice(cinematic_fallbacks)
-                logger.info(f"Using cinematic fallback prompt")
+                logger.info(f"Using pure art fallback prompt")
 
         if post_type == "video":
 

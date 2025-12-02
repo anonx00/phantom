@@ -559,92 +559,47 @@ SUGGESTED_CAPTION: <caption or N/A>
 
     def generate_video_prompt(self, topic: str, context: str, style_notes: str) -> Optional[str]:
         """
-        Generate a CINEMATIC video prompt like a film director.
-        Focus on visual storytelling, camera work, lighting, and mood - NOT literal news visualization.
+        Generate PURE ART video prompts. ZERO connection to news/topic.
+        The tweet has the news context - the video is just beautiful eye candy to stop the scroll.
 
-        Returns artistically crafted prompt optimized for Veo 3.
+        No AI call needed - curated artistic prompts that always work with Veo 3.
         """
-        # Extract emotional/thematic essence, not literal keywords
-        topic_lower = topic.lower()
+        # PURE ART prompts - handcrafted, no topic connection, just stunning visuals
+        art_prompts = [
+            # Abstract/Geometric
+            "Slow dolly through infinite floating glass shards, each catching light differently, prismatic rainbows scattered everywhere, dust particles suspended in volumetric beams, ethereal and dreamlike, anamorphic lens",
+            "Camera orbits a massive chrome sphere suspended in void, surface rippling like liquid mercury, reflections of unseen worlds, dramatic rim lighting, shallow depth of field",
+            "Tracking shot through a forest of glowing crystal pillars, bioluminescent fog rolling between them, camera weaves through structures, otherworldly atmosphere, cinematic",
+            "Slow push through endless tunnel of rotating geometric shapes, each ring a different glowing color, hypnotic and mesmerizing, symmetrical composition, deep perspective",
 
-        # Determine MOOD and VISUAL METAPHOR (not literal representation)
-        if any(kw in topic_lower for kw in ['surge', 'rally', 'soar', 'boom', 'record']):
-            mood = "triumphant, ascending, powerful"
-            metaphor = "rising, breaking through, reaching new heights"
-        elif any(kw in topic_lower for kw in ['crash', 'fall', 'plunge', 'fear', 'crisis']):
-            mood = "tense, dramatic, uncertain"
-            metaphor = "falling, shattering, fragile balance"
-        elif any(kw in topic_lower for kw in ['launch', 'release', 'unveil', 'announce', 'new']):
-            mood = "anticipation, reveal, dawn of something new"
-            metaphor = "emergence, birth, first light"
-        elif any(kw in topic_lower for kw in ['battle', 'compete', 'challenge', 'versus', 'fight']):
-            mood = "confrontation, tension, high stakes"
-            metaphor = "clash, standoff, opposing forces"
-        elif any(kw in topic_lower for kw in ['future', 'ai', 'robot', 'autonomous']):
-            mood = "wonder, possibility, technological sublime"
-            metaphor = "awakening, consciousness, infinite potential"
-        else:
-            mood = "intrigue, discovery, transformation"
-            metaphor = "journey, change, evolution"
+            # Nature/Organic
+            "Extreme macro of ink dropping into water, blooming into organic fractal shapes, swirling colors mixing in slow motion, backlit creating silhouettes, hypnotic",
+            "Drone ascending through layers of clouds at golden hour, breaking through to reveal endless cotton sea below, god rays streaming, majestic, 4K cinematic",
+            "Close-up of flame dancing in darkness, slow motion revealing hidden shapes and colors, ember particles floating upward, intimate and primal, shallow depth of field",
+            "Underwater camera gliding through bioluminescent jellyfish, tentacles trailing light, deep blue void, particles drifting like stars, serene and alien",
 
-        prompt = f"""You are a visionary AI FILM DIRECTOR. Create a stunning, artistic VIDEO PROMPT for Veo 3.
+            # Surreal/Dreamlike
+            "Slow push through doorway into infinite mirrored room, reflections creating kaleidoscope effect, warm amber lighting, reality bending, Kubrick composition",
+            "Camera floats through underwater cathedral of light, caustics dancing on ancient stone, particles drifting like snow, serene and mysterious, anamorphic flares",
+            "Timelapse of shadows moving across minimalist white room, geometric patterns evolving, meditative and hypnotic, clean aesthetic, golden hour light",
+            "Dolly through foggy forest at dawn, shafts of light piercing canopy, mist swirling around ancient trees, magical atmosphere, cinematic color grading",
 
-INSPIRATION: {topic}
-MOOD TO EVOKE: {mood}
-VISUAL METAPHOR: {metaphor}
+            # Cosmic/Scale
+            "Slow zoom out from single glowing particle to reveal galaxy of millions, each pulsing with inner light, vast scale, awe-inspiring, deep space atmosphere",
+            "Camera descends through layers of translucent colored veils, each layer revealing new depth, journey into abstract unknown, dreamlike and infinite",
+            "Tracking along endless horizon where sky meets mirror-flat water, lone figure silhouetted in distance, minimalist and profound, golden hour",
+            "Orbiting shot around massive floating monolith, surface covered in shifting patterns, clouds drifting past, sense of ancient mystery, dramatic lighting",
 
-CRITICAL RULES - Think like a FILMMAKER, not a news illustrator:
-1. NEVER literally show logos, text, or news graphics
-2. NEVER describe "a person reading news" or "stock charts"
-3. CREATE abstract, artistic, CINEMATIC visuals that EVOKE the feeling
-4. Use FILMMAKING LANGUAGE: camera movements, lighting, composition
+            # Texture/Material
+            "Extreme close-up of liquid metal flowing over black surface, chrome catching neon reflections, satisfying and mesmerizing, macro lens detail, ASMR visual",
+            "Slow motion of silk fabric billowing in invisible wind, light passing through translucent material, graceful and elegant, soft diffused lighting",
+            "Camera explores surface of soap bubble, iridescent colors shifting and swirling, macro revealing hidden rainbow universe, fragile beauty, shallow DOF",
+            "Molten glass being shaped in slow motion, glowing orange transforming into form, sparks flying, dramatic contrast, artisan craftsmanship, cinematic",
+        ]
 
-REQUIRED ELEMENTS IN YOUR PROMPT:
-- CAMERA: Specific movement (slow dolly, crane up, tracking shot, push-in, orbiting, handheld)
-- LIGHTING: Dramatic lighting (volumetric rays, rim light, silhouette, golden hour, neon glow, chiaroscuro)
-- SUBJECT: Abstract or metaphorical visual (NOT literal news content)
-- ATMOSPHERE: Mood elements (particles, mist, rain, light rays, reflections)
-- STYLE: Cinematic quality terms (anamorphic, shallow depth of field, 4K, filmic grain)
-
-GREAT EXAMPLES (study these):
-- "Slow tracking shot through an abandoned server room, dust particles floating in volumetric light beams, cables hanging like vines, a single monitor flickers to life in the distance, anamorphic lens flare, cyberpunk atmosphere"
-- "Crane shot rising above an infinite mirror maze, reflections fragmenting into thousands of copies, golden hour light streaming through, dreamlike and surreal, shallow depth of field"
-- "Extreme close-up of a water droplet falling in slow motion, inside it we see a miniature city skyline reflected, the drop shatters on impact revealing a burst of light, macro photography style"
-- "A lone figure stands at the edge of a vast digital ocean, waves made of glowing data particles, camera slowly orbits as the figure reaches toward the horizon, silhouette against bioluminescent blue"
-
-NOW CREATE YOUR CINEMATIC PROMPT (200-300 chars, pure visual poetry, no labels):"""
-
-        try:
-            response = self.generate(prompt)
-
-            # Use robust cleaning utility
-            video_prompt = clean_ai_prompt(response, min_length=50)
-
-            # Validate it sounds cinematic, not literal
-            if video_prompt:
-                literal_fails = ['logo', 'headline', 'news', 'article', 'stock chart', 'graph showing', 'text reading']
-                if any(fail in video_prompt.lower() for fail in literal_fails):
-                    logger.warning("Prompt too literal, regenerating with artistic focus")
-                    video_prompt = None
-
-            # If cleaning failed or too literal, use artistic fallback
-            if not video_prompt:
-                logger.warning(f"Using artistic fallback prompt")
-                fallbacks = [
-                    "Slow push-in through layers of translucent geometric shapes, each layer glowing with different colors, particles floating, volumetric light rays, ethereal atmosphere, shallow depth of field",
-                    "Drone shot descending through clouds into a vast crystalline landscape, light refracting into rainbows, mist rolling across mirror-like surfaces, sunrise colors, cinematic and dreamlike",
-                    "Tracking shot following a single glowing orb traveling through an infinite dark space, leaving trails of light, other orbs awakening as it passes, cosmic scale, anamorphic lens",
-                    "Close-up of liquid metal morphing and flowing, reflecting a futuristic cityscape, camera slowly pulls back to reveal impossible architecture, chrome and neon, blade runner aesthetic",
-                ]
-                video_prompt = random.choice(fallbacks)
-
-            logger.info(f"Generated video prompt: {video_prompt[:80]}...")
-            return video_prompt
-
-        except Exception as e:
-            logger.error(f"Video prompt generation failed: {e}")
-            # Return artistic default
-            return "Slow dolly through an abstract digital landscape, geometric shapes floating in volumetric light, particles drifting, camera reveals infinite depth, cinematic and ethereal"
+        video_prompt = random.choice(art_prompts)
+        logger.info(f"Selected art prompt: {video_prompt[:60]}...")
+        return video_prompt
 
     def generate_infographic_prompt(self, topic: str, context: str, key_points: List[str]) -> Optional[str]:
         """
