@@ -94,7 +94,7 @@ class VeoClient:
         return self._poll_for_completion(lro_name, model_name)
 
     def _poll_for_completion(self, lro_name: str, model_name: str) -> str:
-        """Poll the long-running operation until completion."""
+        """Poll the long-running operation until completion using fetchPredictOperation."""
         import tempfile
         import base64
         from google.cloud import storage
@@ -102,12 +102,17 @@ class VeoClient:
         start_time = time.time()
         poll_count = 0
 
+        # Use fetchPredictOperation endpoint (POST) instead of GET on operation URL
+        # See: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo-video-generation
+        poll_url = f"https://{self.region}-aiplatform.googleapis.com/v1/projects/{self.project_id}/locations/{self.region}/publishers/google/models/{model_name}:fetchPredictOperation"
+
         while time.time() - start_time < 600:  # 10 min timeout
             time.sleep(10)
             poll_count += 1
 
-            poll_url = f"https://{self.region}-aiplatform.googleapis.com/v1/{lro_name}"
-            poll_resp = requests.get(poll_url, headers=self._get_headers())
+            # POST with operationName in body
+            poll_payload = {"operationName": lro_name}
+            poll_resp = requests.post(poll_url, headers=self._get_headers(), json=poll_payload, timeout=30)
             poll_resp.raise_for_status()
             poll_data = poll_resp.json()
 
