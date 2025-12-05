@@ -562,33 +562,56 @@ SUGGESTED_CAPTION: <caption or N/A>
         Generate PURE ART video prompts dynamically using AI.
         ZERO connection to news/topic - the tweet has the news, video is eye candy.
 
-        Uses random artistic seeds (movements, techniques, subjects) for variety.
+        Uses extensive artistic seeds inspired by trending visual content and cinema.
+        Optimized for Veo 3 video generation with modern, engaging aesthetics.
         """
-        # Random artistic elements to seed the AI generation
+        # EXPANDED artistic elements - inspired by trending Instagram, TikTok, and cinema
         art_movements = [
+            # Classic
             "Impressionism", "Surrealism", "Abstract Expressionism", "Minimalism",
             "Art Nouveau", "Baroque", "Romanticism", "Futurism", "Cubism",
-            "Japanese Zen aesthetics", "Nordic noir", "Wabi-sabi"
+            # Asian aesthetics
+            "Japanese Zen aesthetics", "Nordic noir", "Wabi-sabi", "Korean minimalism",
+            # Modern/trending
+            "Vaporwave", "Cyberpunk", "Solarpunk", "Brutalism", "Dark academia",
+            "Liminal space aesthetic", "Synthwave", "Y2K aesthetic", "Cottagecore",
+            "Studio Ghibli style", "Blade Runner 2049 palette", "Christopher Nolan cinematography"
         ]
 
         camera_techniques = [
+            # Classic
             "slow dolly push", "smooth orbiting shot", "macro close-up", "drone ascending",
             "tracking shot", "slow zoom out", "floating camera", "timelapse",
-            "underwater glide", "first-person drift", "crane descent", "360 rotation"
+            "underwater glide", "first-person drift", "crane descent", "360 rotation",
+            # Modern/cinematic
+            "steadicam follow", "whip pan reveal", "rack focus transition", "Dutch angle tilt",
+            "extreme wide establishing", "intimate over-shoulder", "God's eye view",
+            "spiral ascent", "parallax dolly zoom", "gliding FPV drone", "handheld intimate",
+            "vertigo zoom effect", "slow motion tracking"
         ]
 
         visual_subjects = [
+            # Nature/organic
             "light through water", "floating particles", "liquid metal", "glass reflections",
             "silk in wind", "ink in water", "smoke trails", "crystal formations",
             "bioluminescence", "aurora lights", "soap bubbles", "molten glass",
             "dew drops", "flames dancing", "sand dunes", "fog rolling", "clouds forming",
-            "ice melting", "petals falling", "feathers floating", "rain on windows"
+            "ice melting", "petals falling", "feathers floating", "rain on windows",
+            # Modern/abstract
+            "neon reflections on wet pavement", "holographic shimmer", "chrome spheres",
+            "prismatic light beams", "particle fields", "fluid dynamics", "magnetic ferrofluid",
+            "phosphorescent waves", "volumetric god rays", "caustic light patterns",
+            "iridescent surfaces", "light diffraction through crystals", "plasma tendrils",
+            "abstract geometry morphing", "digital noise patterns", "glitch art transitions"
         ]
 
         moods = [
             "ethereal and dreamlike", "serene and meditative", "awe-inspiring",
             "intimate and contemplative", "mysterious and ancient", "hypnotic",
-            "majestic and vast", "delicate and fragile", "powerful and primal"
+            "majestic and vast", "delicate and fragile", "powerful and primal",
+            # Modern moods
+            "nostalgic and melancholic", "electric and kinetic", "otherworldly",
+            "transcendent and cosmic", "visceral and raw", "sublime and infinite"
         ]
 
         # Pick random seeds

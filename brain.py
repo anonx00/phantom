@@ -1683,9 +1683,15 @@ Does it relate to actual topic "{topic}"? Are all claims real?
             post_type = "video"
             research_result = {'format': 'VIDEO', 'style_notes': '', 'reasoning': 'FORCE_VIDEO override'}
         elif Config.BUDGET_MODE:
-            logger.info("BUDGET_MODE enabled, using text-only format")
-            post_type = "text"
-            research_result = {'format': 'TEXT', 'style_notes': '', 'reasoning': 'Budget mode'}
+            # STRICT BUDGET MODE: Only allow 1 video/day OR text (no images/infographics/memes)
+            if video_count >= 1:
+                logger.info(f"💰 BUDGET_MODE: Video quota used ({video_count}/1 today), using text")
+                post_type = "text"
+                research_result = {'format': 'TEXT', 'style_notes': '', 'reasoning': 'Budget mode - video quota used'}
+            else:
+                logger.info(f"💰 BUDGET_MODE: Generating daily video ({video_count}/1 today)")
+                post_type = "video"
+                research_result = {'format': 'VIDEO', 'style_notes': '', 'reasoning': 'Budget mode - daily video'}
         elif image_count >= 5 and video_count >= 1:
             # No media budget at all - skip research API call
             logger.info(f"💰 Media budget exhausted - using text (saved API call)")
