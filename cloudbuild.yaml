@@ -49,7 +49,7 @@ substitutions:
   _REPO_NAME: phantom-repo
   _IMAGE_NAME: phantom-influencer
   _JOB_NAME: phantom-influencer-job
-  _BUDGET_MODE: "True"
+  _BUDGET_MODE: "False"
 
 options:
   logging: CLOUD_LOGGING_ONLY

@@ -47,17 +47,15 @@ variable "job_name" {
 }
 
 # Scheduler configuration - AWST times
+# Reduced from 7 to 4 triggers per day to cut costs by ~43%
 variable "scheduler_triggers" {
   description = "Cron expressions for Cloud Scheduler triggers (in configured timezone)"
   type        = list(string)
   default = [
-    "30 7 * * *",   # 7:30 AM AWST - Morning coffee
-    "15 10 * * *",  # 10:15 AM AWST - Late morning
-    "45 12 * * *",  # 12:45 PM AWST - Lunch break
-    "30 15 * * *",  # 3:30 PM AWST - Afternoon
-    "0 18 * * *",   # 6:00 PM AWST - Early evening
-    "30 20 * * *",  # 8:30 PM AWST - Peak evening
-    "15 22 * * *",  # 10:15 PM AWST - Night
+    "30 10 * * *",  # 10:30 AM AWST - Late morning
+    "45 14 * * *",  # 2:45 PM AWST - Afternoon
+    "0 18 * * *",   # 6:00 PM AWST - Peak evening (best for video posts)
+    "30 21 * * *",  # 9:30 PM AWST - Night scrolling
   ]
 }
 
