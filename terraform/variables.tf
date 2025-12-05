@@ -29,9 +29,9 @@ variable "timezone" {
 }
 
 variable "budget_mode" {
-  description = "Enable budget mode to disable expensive video generation"
+  description = "Enable strict budget mode: 1 post/day, max 1 video/day, no images/infographics"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "image_name" {
@@ -47,15 +47,13 @@ variable "job_name" {
 }
 
 # Scheduler configuration - AWST times
-# Reduced from 7 to 4 triggers per day to cut costs by ~43%
+# STRICT BUDGET MODE: 1 trigger per day to hit $30 AUD/month target
+# Single daily post at peak engagement time (evening)
 variable "scheduler_triggers" {
   description = "Cron expressions for Cloud Scheduler triggers (in configured timezone)"
   type        = list(string)
   default = [
-    "30 10 * * *",  # 10:30 AM AWST - Late morning
-    "45 14 * * *",  # 2:45 PM AWST - Afternoon
-    "0 18 * * *",   # 6:00 PM AWST - Peak evening (best for video posts)
-    "30 21 * * *",  # 9:30 PM AWST - Night scrolling
+    "0 18 * * *",   # 6:00 PM AWST - Peak evening engagement (1 post/day: video OR text)
   ]
 }
 
