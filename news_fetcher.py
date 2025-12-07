@@ -261,16 +261,15 @@ class NewsFetcher:
         # Each task is a tuple: (function, args, category_override)
         fetch_tasks = []
 
-        # Hacker News task
+        # Hacker News task (best for tech/general)
         fetch_tasks.append(('hn', None, 'tech'))
 
-        # RSS feed tasks
-        for feed_url in self.feeds['ai']:
-            fetch_tasks.append(('rss', (feed_url, 'ai', 5), None))
-        for feed_url in self.feeds['crypto']:
-            fetch_tasks.append(('rss', (feed_url, 'crypto', 5), None))
-        for feed_url in self.feeds['finance']:
-            fetch_tasks.append(('rss', (feed_url, 'finance', 5), None))
+        # RSS feed tasks - fetch from ALL categories for diverse coverage
+        # Limit per feed to control API costs while maintaining variety
+        for category, feed_urls in self.feeds.items():
+            limit_per_feed = 3 if len(feed_urls) > 2 else 5  # Less per feed if many feeds
+            for feed_url in feed_urls:
+                fetch_tasks.append(('rss', (feed_url, category, limit_per_feed), None))
 
         def execute_fetch(task):
             """Execute a single fetch task."""
@@ -400,52 +399,36 @@ class NewsFetcher:
         if not stories:
             return []
 
-        # Default preference
-        if not preferred_categories:
-            preferred_categories = ['ai', 'crypto', 'finance', 'tech']
+        # NO PRE-SCORING OR FILTERING - AI decides what's interesting
+        # We just ensure variety so AI has options from different sources/topics
+        import random
+        random.shuffle(stories)  # Remove source bias
 
-        # Keyword weights (same as get_trending_story)
-        keyword_weights = {
-            'ai': ['ai', 'artificial intelligence', 'machine learning', 'llm', 'neural',
-                   'gpt', 'claude', 'gemini', 'openai', 'anthropic', 'chatgpt'],
-            'crypto': ['crypto', 'bitcoin', 'ethereum', 'blockchain', 'defi', 'web3'],
-            'finance': ['stock', 'market', 'trading', 'investment', 'economy'],
-            'tech': ['programming', 'developer', 'code', 'framework', 'startup']
-        }
-
-        # Score stories
-        scored = []
-        for story in stories:
-            title_lower = story['title'].lower()
-            category = story.get('category', 'tech')
-
-            score = 0
-            if category in preferred_categories:
-                score += (len(preferred_categories) - preferred_categories.index(category)) * 100
-
-            for cat, keywords in keyword_weights.items():
-                matches = sum(1 for kw in keywords if kw in title_lower)
-                score += matches * (30 if cat == category else 10)
-
-            score += story.get('score', 0) / 10
-            scored.append({**story, 'relevance_score': score})
-
-        scored.sort(key=lambda x: x['relevance_score'], reverse=True)
-
-        # Return top N with variety (pick from different categories)
+        # ENSURE VARIETY - Present diverse options, let AI pick
         result = []
         seen_categories = set()
+        seen_sources = set()
 
-        for story in scored:
-            cat = story.get('category', 'tech')
-            # Ensure category variety in results
-            if len(result) < count:
-                # Prioritize diversity in first few
-                if cat not in seen_categories or len(result) >= count // 2:
-                    result.append(story)
-                    seen_categories.add(cat)
+        # Pass 1: One from each category
+        for story in stories:
+            cat = story.get('category', 'unknown')
+            if cat not in seen_categories and len(result) < count:
+                result.append(story)
+                seen_categories.add(cat)
 
-        logger.info(f"Returning {len(result)} stories for AI selection")
+        # Pass 2: One from each source (for more variety)
+        for story in stories:
+            src = story.get('source', 'unknown')
+            if story not in result and src not in seen_sources and len(result) < count:
+                result.append(story)
+                seen_sources.add(src)
+
+        # Pass 3: Fill remaining slots
+        for story in stories:
+            if story not in result and len(result) < count:
+                result.append(story)
+
+        logger.info(f"Presenting {len(result)} diverse stories - AI decides what's engaging")
         return result[:count]
 
     def validate_url(self, url: str) -> bool:
