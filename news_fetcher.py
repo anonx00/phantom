@@ -261,16 +261,15 @@ class NewsFetcher:
         # Each task is a tuple: (function, args, category_override)
         fetch_tasks = []
 
-        # Hacker News task
+        # Hacker News task (best for tech/general)
         fetch_tasks.append(('hn', None, 'tech'))
 
-        # RSS feed tasks
-        for feed_url in self.feeds['ai']:
-            fetch_tasks.append(('rss', (feed_url, 'ai', 5), None))
-        for feed_url in self.feeds['crypto']:
-            fetch_tasks.append(('rss', (feed_url, 'crypto', 5), None))
-        for feed_url in self.feeds['finance']:
-            fetch_tasks.append(('rss', (feed_url, 'finance', 5), None))
+        # RSS feed tasks - fetch from ALL categories for diverse coverage
+        # Limit per feed to control API costs while maintaining variety
+        for category, feed_urls in self.feeds.items():
+            limit_per_feed = 3 if len(feed_urls) > 2 else 5  # Less per feed if many feeds
+            for feed_url in feed_urls:
+                fetch_tasks.append(('rss', (feed_url, category, limit_per_feed), None))
 
         def execute_fetch(task):
             """Execute a single fetch task."""
@@ -400,17 +399,21 @@ class NewsFetcher:
         if not stories:
             return []
 
-        # Default preference
+        # Default preference - all categories for diverse coverage
         if not preferred_categories:
-            preferred_categories = ['ai', 'crypto', 'finance', 'tech']
+            preferred_categories = ['ai', 'crypto', 'finance', 'tech', 'science', 'world', 'business', 'space']
 
-        # Keyword weights (same as get_trending_story)
+        # Keyword weights for scoring relevance
         keyword_weights = {
             'ai': ['ai', 'artificial intelligence', 'machine learning', 'llm', 'neural',
                    'gpt', 'claude', 'gemini', 'openai', 'anthropic', 'chatgpt'],
-            'crypto': ['crypto', 'bitcoin', 'ethereum', 'blockchain', 'defi', 'web3'],
-            'finance': ['stock', 'market', 'trading', 'investment', 'economy'],
-            'tech': ['programming', 'developer', 'code', 'framework', 'startup']
+            'crypto': ['crypto', 'bitcoin', 'ethereum', 'blockchain', 'defi', 'web3', 'nft'],
+            'finance': ['stock', 'market', 'trading', 'investment', 'economy', 'fed', 'inflation'],
+            'tech': ['programming', 'developer', 'code', 'framework', 'startup', 'apple', 'google', 'microsoft'],
+            'science': ['research', 'study', 'discovery', 'scientists', 'breakthrough', 'experiment'],
+            'world': ['war', 'president', 'government', 'election', 'crisis', 'breaking', 'country'],
+            'business': ['ceo', 'company', 'billion', 'merger', 'acquisition', 'layoffs', 'earnings'],
+            'space': ['nasa', 'spacex', 'rocket', 'mars', 'moon', 'satellite', 'astronaut', 'launch']
         }
 
         # Score stories

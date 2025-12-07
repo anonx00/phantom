@@ -1147,11 +1147,17 @@ WHY: [impact/relevance to {target_audience}]
         if len(stories) == 1:
             return stories[0], {'should_post': True, 'style_tip': '', 'reason': 'Only option'}
 
-        # Build story list
-        story_list = "\n".join([
-            f"{i+1}. [{s.get('category', 'tech').upper()}] {s['title']}"
-            for i, s in enumerate(stories)
-        ])
+        # Build story list with rich context for AI decision-making
+        def format_story(i: int, s: dict) -> str:
+            cat = s.get('category', 'tech').upper()
+            title = s['title']
+            source = s.get('source', 'Unknown')
+            # Include HN score if available (indicates popularity)
+            score = s.get('score', 0)
+            score_str = f" [🔥 {score} pts]" if score > 100 else ""
+            return f"{i+1}. [{cat}] {title}{score_str}\n   Source: {source}"
+
+        story_list = "\n".join([format_story(i, s) for i, s in enumerate(stories)])
 
         # Get full AI context (single Firestore query - efficient)
         ai_context = self._get_ai_context_summary()
