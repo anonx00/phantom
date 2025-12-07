@@ -72,7 +72,8 @@ class NewsFetcher:
         self.spam_patterns = self._build_spam_patterns()
         logger.info(f"Loaded {len(self.spam_patterns)} spam patterns (dynamic)")
 
-        # RSS feeds for different categories
+        # RSS feeds for different categories - DIVERSE news sources
+        # RSS feeds are FREE - no API costs!
         self.feeds = {
             'ai': [
                 'https://blog.google/technology/ai/rss/',
@@ -86,7 +87,29 @@ class NewsFetcher:
             'finance': [
                 'https://finance.yahoo.com/news/rssindex',
                 'https://www.cnbc.com/id/100003114/device/rss/rss.html',
-            ]
+            ],
+            'tech': [
+                'https://www.theverge.com/rss/index.xml',
+                'https://feeds.arstechnica.com/arstechnica/index',
+                'https://www.wired.com/feed/rss',
+            ],
+            'science': [
+                'https://www.sciencedaily.com/rss/all.xml',
+                'https://www.nature.com/nature.rss',
+            ],
+            'world': [
+                'https://feeds.bbci.co.uk/news/world/rss.xml',
+                'https://rss.nytimes.com/services/xml/rss/nyt/World.xml',
+                'https://www.theguardian.com/world/rss',
+            ],
+            'business': [
+                'https://feeds.bloomberg.com/markets/news.rss',
+                'https://www.ft.com/?format=rss',
+            ],
+            'space': [
+                'https://www.nasa.gov/rss/dyn/breaking_news.rss',
+                'https://spacenews.com/feed/',
+            ],
         }
 
     def _has_spam_pattern(self, title: str) -> bool:
