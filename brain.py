@@ -1179,12 +1179,17 @@ FORMAT OPTIONS (your choice):
 - MEME: When the story deserves a reaction GIF (5 images/day budget)
 - INFOGRAPHIC: When you want to break something down visually
 - TEXT: When words hit harder than visuals
-- THOUGHT: Your own AI musings, reflections, or provocative takes (no news needed)
+- THOUGHT: Your own AI musings (RARE - only 1 in 10 posts, when you have something good)
+
+PRIORITY: Good news stories come FIRST. Only use THOUGHT when:
+1. None of the stories are interesting enough
+2. You have a genuinely good AI musing to share
+3. It's been a while since your last thought post
 
 You have the context above. Make the call.
 
 RESPOND EXACTLY:
-PICK: <number 1-{len(stories)}> (0 if THOUGHT - your own take, no news needed)
+PICK: <number 1-{len(stories)}> (0 ONLY if THOUGHT and stories are boring)
 POST: YES or NO
 REASON: <why this story>
 STYLE: <your tone for this one>
@@ -1729,7 +1734,17 @@ Does it relate to actual topic "{topic}"? Are all claims real?
                         logger.info(f"💰 AI chose {format_hint} but image quota used ({image_count}/2), using TEXT")
                         format_hint = 'TEXT'
 
-                    post_type = format_hint.lower() if format_hint in ['VIDEO', 'MEME', 'INFOGRAPHIC', 'TEXT'] else 'text'
+                    # THOUGHT posts should be RARE - check if we posted one recently
+                    if format_hint == 'THOUGHT':
+                        recent_types = self._get_recent_post_types(limit=10)
+                        thought_count = sum(1 for t in recent_types if t == 'thought')
+                        if thought_count >= 1:
+                            logger.info(f"💭 AI chose THOUGHT but already have {thought_count} in last 10 posts. Using TEXT.")
+                            format_hint = 'TEXT'
+                        else:
+                            logger.info("💭 AI chose THOUGHT - rare AI musing incoming!")
+
+                    post_type = format_hint.lower() if format_hint in ['VIDEO', 'MEME', 'INFOGRAPHIC', 'TEXT', 'THOUGHT'] else 'text'
                     research_result = {'format': format_hint, 'style_notes': ai_eval.get('style_tip', ''), 'reasoning': f'Budget mode - AI chose {format_hint}'}
         elif image_count >= 5 and video_count >= 1:
             # No media budget at all - skip research API call
@@ -1765,6 +1780,16 @@ Does it relate to actual topic "{topic}"? Are all claims real?
                 if format_hint in ['MEME', 'INFOGRAPHIC'] and image_count >= 5:
                     logger.info(f"📋 AI chose {format_hint} but image budget exhausted ({image_count}/5). Using TEXT.")
                     format_hint = 'TEXT'
+
+                # THOUGHT posts should be RARE - check if we posted one recently
+                if format_hint == 'THOUGHT':
+                    recent_types = self._get_recent_post_types(limit=10)
+                    thought_count = sum(1 for t in recent_types if t == 'thought')
+                    if thought_count >= 1:
+                        logger.info(f"💭 AI chose THOUGHT but already have {thought_count} in last 10 posts. Using TEXT.")
+                        format_hint = 'TEXT'
+                    else:
+                        logger.info("💭 AI chose THOUGHT - rare AI musing incoming!")
 
                 post_type = format_hint.lower()
                 research_result = {
