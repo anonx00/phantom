@@ -368,6 +368,26 @@ def main():
                     except Exception:
                         pass
 
+        elif strategy["type"] == "thought":
+            # THOUGHT: AI musings/reflections - simple text post
+            thought_text = strategy["content"]
+            if isinstance(thought_text, list):
+                thought_text = thought_text[0]
+
+            try:
+                # Basic length check
+                if len(thought_text) > 280:
+                    logger.warning(f"Thought too long, truncating: {thought_text[:50]}...")
+                    thought_text = thought_text[:277] + "..."
+
+                response = post_tweet_v2(client_v2, text=thought_text)
+                logger.info(f"💭 AI Thought posted! ID: {response.data['id']}")
+                brain.log_post(strategy, success=True)
+            except Exception as e:
+                logger.error(f"Failed to post AI thought: {e}")
+                brain.log_post(strategy, success=False, error=str(e))
+                sys.exit(1)
+
         elif strategy["type"] in ["thread", "text"]:
             tweets = strategy["content"]
             # Ensure it's a list

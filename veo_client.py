@@ -53,7 +53,8 @@ class VeoClient:
 
         if is_veo3:
             # Veo 3 requires generateAudio, doesn't support enhancePrompt
-            parameters["generateAudio"] = False
+            # Enable audio generation for immersive videos
+            parameters["generateAudio"] = True
         else:
             # Veo 2 supports enhancePrompt
             parameters["enhancePrompt"] = True

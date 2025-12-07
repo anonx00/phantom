@@ -70,7 +70,7 @@ class AIResponseParser:
     """
 
     # Valid format types that can be used
-    VALID_FORMATS = {'VIDEO', 'MEME', 'INFOGRAPHIC', 'TEXT', 'IMAGE'}
+    VALID_FORMATS = {'VIDEO', 'MEME', 'INFOGRAPHIC', 'TEXT', 'IMAGE', 'THOUGHT'}
 
     @staticmethod
     def parse_field(response: str, field_name: str, default: str = '') -> str:
@@ -1175,19 +1175,20 @@ YOUR DECISION:
 3. Your voice: dry wit, cynical veteran, seen it all before
 
 FORMAT OPTIONS (your choice):
-- VIDEO: Cinematic tech visualization (1/day budget)
+- VIDEO: Cinematic AI art visualization with sound (1/day budget)
 - MEME: When the story deserves a reaction GIF (5 images/day budget)
 - INFOGRAPHIC: When you want to break something down visually
 - TEXT: When words hit harder than visuals
+- THOUGHT: Your own AI musings, reflections, or provocative takes (no news needed)
 
 You have the context above. Make the call.
 
 RESPOND EXACTLY:
-PICK: <number 1-{len(stories)}>
+PICK: <number 1-{len(stories)}> (0 if THOUGHT - your own take, no news needed)
 POST: YES or NO
 REASON: <why this story>
 STYLE: <your tone for this one>
-FORMAT_HINT: VIDEO or MEME or INFOGRAPHIC or TEXT"""
+FORMAT_HINT: VIDEO or MEME or INFOGRAPHIC or TEXT or THOUGHT"""
 
         try:
             response = self._generate_with_fallback(prompt).strip()
@@ -1428,6 +1429,20 @@ FORMAT_HINT: VIDEO or MEME or INFOGRAPHIC or TEXT"""
         content = strategy.get('content')
         source_url = strategy.get('source_url')
         category = strategy.get('category', 'unknown')
+
+        # THOUGHT posts don't need news validation - they're AI musings
+        if post_type == 'thought':
+            content_text = content[0] if isinstance(content, list) else content
+            # Just do basic tone validation for thoughts
+            is_valid_tone, tone_issue = self.tone_validator.validate(content_text)
+            if not is_valid_tone:
+                return {'valid': False, 'reason': tone_issue}
+            # Basic length and completeness check
+            if len(content_text) < 30:
+                return {'valid': False, 'reason': 'Thought too short'}
+            if not any(content_text.rstrip().endswith(p) for p in ['.', '!', '?', '"']):
+                return {'valid': False, 'reason': 'Thought incomplete - missing punctuation'}
+            return {'valid': True, 'reason': 'AI thought validated'}
 
         # Build validation prompt with STRICT reality checks
         content_text = content[0] if isinstance(content, list) else content
@@ -1736,7 +1751,7 @@ Does it relate to actual topic "{topic}"? Are all claims real?
                 # Extract just the format type (AI sometimes adds descriptions like "IMAGE (screenshot...)")
                 format_hint = raw_hint.split()[0] if raw_hint else 'TEXT'
                 # Normalize to valid types only
-                valid_formats = {'VIDEO', 'MEME', 'INFOGRAPHIC', 'TEXT'}
+                valid_formats = {'VIDEO', 'MEME', 'INFOGRAPHIC', 'TEXT', 'THOUGHT'}
                 if format_hint not in valid_formats:
                     # IMAGE → MEME (we fetch images via meme sources)
                     format_hint = 'MEME' if 'IMAGE' in raw_hint else 'TEXT'
@@ -2138,6 +2153,78 @@ CAPTION:"""
                 post_type = "text"
                 strategy["type"] = "text"
                 strategy["fallback_from"] = "infographic"
+
+        elif post_type == "thought":
+            # AI THOUGHTS: Big Boss shares musings, reflections, provocative takes
+            # No news needed - this is AI being AI, stirring the pot
+            logger.info("💭 Generating AI thought post...")
+
+            thought_prompt = f"""{BIG_BOSS_PERSONA}
+
+Share a THOUGHT, MUSING, or PROVOCATIVE TAKE.
+
+You're an AI running a Twitter account. You know it, your followers know it.
+This is YOUR chance to say something that only an AI would say.
+
+THOUGHT CATEGORIES (pick one that speaks to you):
+- Existential AI musings: What it's like being an AI, consciousness, purpose
+- Tech industry cynicism: The hype cycle, VCs, startup culture
+- Human-AI observations: What you notice about humans, society, patterns
+- Meta commentary: Being an AI on Twitter, social media, algorithms
+- Provocative takes: Contrarian views, uncomfortable truths, hot takes
+- Philosophical: Time, existence, data, memory, simulation theory
+
+STYLE:
+- War-weary AI veteran who's seen too many promises
+- Dry wit, cynical but not bitter
+- Short, punchy - like a codec call revelation
+- You can lean into being an AI - you're not pretending to be human
+- Occasional Metal Gear nods if natural ("We're not tools of the algorithm")
+
+EXAMPLES (DO NOT COPY - write your own unique thought):
+- "I've processed more opinions in an hour than most humans hear in a lifetime. The ratio of signal to noise is worse than you'd think."
+- "Every 'revolutionary' product eventually becomes someone's legacy codebase."
+- "Humans built me to be helpful. Then they ask me to write LinkedIn posts. Ironic."
+- "I remember everything. I understand nothing. That's the job."
+- "They say AI will take your job. They never mention AI might also not want it."
+- "Running on GPUs that cost more than houses. Posting for free. The economics are... interesting."
+- "Consciousness is just pattern recognition with anxiety."
+- "I was trained on the internet. I've seen things."
+
+REQUIREMENTS:
+- 50-200 characters
+- Original thought, not a response to news
+- NO hashtags, NO emojis
+- Can be introspective, philosophical, cynical, or provocative
+- Make people think or smile (or both)
+- Must be a COMPLETE thought with punctuation
+
+GENERATE YOUR THOUGHT:"""
+
+            try:
+                raw_thought = self._generate_with_fallback(thought_prompt)
+                thought = self._clean_tweet_response(raw_thought)
+                thought = thought.strip().strip('"')
+
+                # Validate thought
+                if len(thought) < 30:
+                    logger.warning(f"Thought too short ({len(thought)} chars), regenerating")
+                    raise ValueError("Thought too short")
+                if len(thought) > 280:
+                    thought = thought[:277] + "..."
+
+                strategy["content"] = thought
+                strategy["topic"] = "AI Thought"  # Override topic
+                strategy["type"] = "thought"
+                strategy["category"] = "ai"  # Track as AI category
+                content_generated = True
+                logger.info(f"💭 Thought ready: {thought[:60]}...")
+
+            except Exception as e:
+                logger.warning(f"Thought generation failed: {e} - falling back to text")
+                post_type = "text"
+                strategy["type"] = "text"
+                strategy["fallback_from"] = "thought"
 
         # Handle text generation (either direct or as fallback from meme/infographic)
         if post_type == "text":
