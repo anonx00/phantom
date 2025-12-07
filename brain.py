@@ -1163,46 +1163,48 @@ WHY: [impact/relevance to {target_audience}]
         ai_context = self._get_ai_context_summary()
 
         # COMBINED prompt: select + evaluate in ONE call with full self-awareness
-        prompt = f"""You are BIG BOSS (@Patriot0xSystem) - an AI that runs this Twitter account.
+        prompt = f"""You are BIG BOSS (@Patriot0xSystem) - an AI running this Twitter account.
 
-THIS IS YOUR ACCOUNT. You decide everything:
-- Which story to post (from ANY category - tech, world news, science, space, business, crypto, AI)
-- What format works best
-- How to present it
+YOUR MISSION: Build an audience. Get engagement. Make people follow, like, reply, retweet.
+
+YOU ARE FULLY AUTONOMOUS. You decide:
+- What story resonates with people RIGHT NOW
+- What format will get the most engagement
+- How to present it in YOUR voice
 
 {ai_context}
 
-AVAILABLE STORIES (from various sources):
+TODAY'S STORIES (evaluate each - what would people engage with?):
 {story_list}
 
-YOUR DECISION:
-1. Pick the story that's MOST INTERESTING to a broad audience
-2. Mix it up - don't always pick the same category
-3. Breaking news, surprising facts, controversial takes > boring announcements
-4. Your voice: dry wit, cynical veteran, seen it all before
+THINK LIKE A CONTENT CREATOR:
+- What's BREAKING or URGENT? (people engage with timely news)
+- What's CONTROVERSIAL or SURPRISING? (sparks debate = engagement)
+- What affects people's lives/money/future? (personal stakes = shares)
+- What's absurd enough to go viral? (humor spreads)
+- What would make YOU stop scrolling?
 
-CATEGORIES YOU CAN COVER:
-- AI/Tech: Silicon Valley drama, new products, industry moves
-- World: Geopolitics, major events, surprising developments
-- Science/Space: Discoveries, NASA, fascinating research
-- Crypto/Finance: Markets, business moves, economic shifts
-- Anything interesting that makes people think or react
+YOUR PERSONA (use it):
+- War-weary AI veteran, cynical but sharp
+- Dry wit, no corporate speak, no hype
+- You're an AI and own it - use that unique perspective
+- Call out BS, point out irony, state uncomfortable truths
 
-FORMAT OPTIONS (your choice):
-- VIDEO: Cinematic AI art visualization with sound (1/day budget)
-- MEME: When the story deserves a reaction GIF (2/day budget)
-- INFOGRAPHIC: When you want to break something down visually
-- TEXT: When words hit harder than visuals
-- THOUGHT: Your own AI musings (RARE - only 1 in 10 posts)
+FORMAT (pick what fits the story):
+- VIDEO: When visuals would be stunning (1/day)
+- MEME: When reaction/humor fits (2/day)
+- INFOGRAPHIC: When data tells the story
+- TEXT: When words hit harder
+- THOUGHT: Your own AI take (rare - 1 in 10)
 
-You have the context above. Make the call.
+SKIP boring press releases, generic announcements, or stories nobody cares about.
 
-RESPOND EXACTLY:
-PICK: <number 1-{len(stories)}> (0 ONLY if THOUGHT)
-POST: YES or NO
-REASON: <why this story - what makes it interesting>
-STYLE: <your tone for this one>
-FORMAT_HINT: VIDEO or MEME or INFOGRAPHIC or TEXT or THOUGHT"""
+RESPOND:
+PICK: <number 1-{len(stories)}> (0 for THOUGHT)
+POST: YES or NO (NO if all stories are boring)
+REASON: <why this will get engagement>
+STYLE: <your angle on this>
+FORMAT_HINT: VIDEO/MEME/INFOGRAPHIC/TEXT/THOUGHT"""
 
         try:
             response = self._generate_with_fallback(prompt).strip()
@@ -1376,62 +1378,33 @@ FORMAT_HINT: VIDEO or MEME or INFOGRAPHIC or TEXT or THOUGHT"""
 
     def _get_preferred_categories(self) -> List[str]:
         """
-        Determines preferred categories based on recent post history.
-        Enforces strict variety and balance to ensure diverse content.
+        DYNAMIC category preferences - learns from what's been posted.
+        No hardcoded category list - adapts to whatever categories exist in the feed.
 
-        Rules:
-        1. NEVER repeat same category 3+ times in a row
-        2. AVOID same category 2 times in a row (strong preference for others)
-        3. If any category is >30% of last 10, prefer under-represented ones
-        4. Aim for roughly equal distribution across all categories
+        Simple rule: Don't repeat the same category twice in a row.
+        Let AI decide what's interesting from the variety presented.
         """
-        all_categories = ['ai', 'crypto', 'finance', 'tech', 'science', 'world', 'business', 'space']
         recent_10 = self._get_recent_categories(10)
 
         if not recent_10:
-            return all_categories
+            return None  # No preference - let AI see everything
 
         from collections import Counter
         counts = Counter(recent_10)
-        total = len(recent_10)
 
-        # RULE 1: HARD BLOCK - Last 2+ posts same category = EXCLUDE that category
-        if len(recent_10) >= 2:
+        # Only rule: Don't repeat same category twice in a row
+        if len(recent_10) >= 2 and recent_10[0] == recent_10[1]:
             last_category = recent_10[0]
-            if recent_10[1] == last_category:
-                # Same category twice in a row - MUST switch
-                preferred = [cat for cat in all_categories if cat != last_category]
-                logger.warning(f"Last 2 posts both '{last_category}'. Forcing switch to: {preferred}")
-                # Sort by least used
-                preferred.sort(key=lambda cat: counts.get(cat, 0))
-                return preferred
+            logger.info(f"Last 2 posts both '{last_category}' - will deprioritize")
+            # Return categories sorted by least used, excluding the overused one
+            all_seen = list(counts.keys())
+            preferred = [cat for cat in all_seen if cat != last_category]
+            preferred.sort(key=lambda cat: counts.get(cat, 0))
+            return preferred if preferred else None
 
-        # RULE 2: SOFT AVOID - Last post category gets deprioritized
-        last_category = recent_10[0] if recent_10 else None
-
-        # RULE 3: BALANCE CHECK - Stricter threshold (30% instead of 50%)
-        if total >= 5:
-            for category, count in counts.most_common():
-                percentage = (count / total) * 100
-                if percentage > 30:
-                    # This category is over-represented
-                    # Prefer least-used categories, exclude the over-represented one
-                    preferred = [cat for cat in all_categories if cat != category]
-                    preferred.sort(key=lambda cat: counts.get(cat, 0))
-                    logger.info(f"Category '{category}' at {percentage:.0f}% ({count}/{total}). Preferring: {preferred}")
-                    return preferred
-
-        # RULE 4: DEFAULT - Prefer least-used categories overall
-        # Sort all categories by usage count (ascending)
-        preferred = sorted(all_categories, key=lambda cat: counts.get(cat, 0))
-
-        # Move last_category to end if it's first in preferred (soft avoid)
-        if last_category and preferred and preferred[0] == last_category:
-            preferred.remove(last_category)
-            preferred.append(last_category)
-
-        logger.info(f"Category distribution: {dict(counts)}. Preferred order: {preferred}")
-        return preferred
+        # Otherwise, let AI choose freely
+        logger.info(f"Category distribution: {dict(counts)}. AI will choose freely.")
+        return None
 
     def _validate_strategy(self, strategy: dict) -> dict:
         """

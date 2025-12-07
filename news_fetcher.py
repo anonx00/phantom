@@ -399,56 +399,45 @@ class NewsFetcher:
         if not stories:
             return []
 
-        # Default preference - all categories for diverse coverage
-        if not preferred_categories:
-            preferred_categories = ['ai', 'crypto', 'finance', 'tech', 'science', 'world', 'business', 'space']
-
-        # Keyword weights for scoring relevance
-        keyword_weights = {
-            'ai': ['ai', 'artificial intelligence', 'machine learning', 'llm', 'neural',
-                   'gpt', 'claude', 'gemini', 'openai', 'anthropic', 'chatgpt'],
-            'crypto': ['crypto', 'bitcoin', 'ethereum', 'blockchain', 'defi', 'web3', 'nft'],
-            'finance': ['stock', 'market', 'trading', 'investment', 'economy', 'fed', 'inflation'],
-            'tech': ['programming', 'developer', 'code', 'framework', 'startup', 'apple', 'google', 'microsoft'],
-            'science': ['research', 'study', 'discovery', 'scientists', 'breakthrough', 'experiment'],
-            'world': ['war', 'president', 'government', 'election', 'crisis', 'breaking', 'country'],
-            'business': ['ceo', 'company', 'billion', 'merger', 'acquisition', 'layoffs', 'earnings'],
-            'space': ['nasa', 'spacex', 'rocket', 'mars', 'moon', 'satellite', 'astronaut', 'launch']
-        }
-
-        # Score stories
+        # DYNAMIC SCORING - Let AI be the judge, we just ensure variety
+        # Score based on: popularity (HN score), freshness, and variety
         scored = []
         for story in stories:
             title_lower = story['title'].lower()
-            category = story.get('category', 'tech')
 
-            score = 0
-            if category in preferred_categories:
-                score += (len(preferred_categories) - preferred_categories.index(category)) * 100
+            # Base score from source popularity (HN score, etc)
+            score = story.get('score', 0)
 
-            for cat, keywords in keyword_weights.items():
-                matches = sum(1 for kw in keywords if kw in title_lower)
-                score += matches * (30 if cat == category else 10)
+            # Boost for engagement signals in title (dynamic, not keyword-locked)
+            engagement_signals = ['breaking', 'just', 'announces', 'reveals', 'launches',
+                                  'billion', 'million', 'dies', 'fired', 'quits', 'leaked',
+                                  'exclusive', 'first', 'new', 'warns', 'crashes', 'surges']
+            for signal in engagement_signals:
+                if signal in title_lower:
+                    score += 50  # Boost potentially viral content
 
-            score += story.get('score', 0) / 10
             scored.append({**story, 'relevance_score': score})
 
+        # Sort by score
         scored.sort(key=lambda x: x['relevance_score'], reverse=True)
 
-        # Return top N with variety (pick from different categories)
+        # ENSURE VARIETY - Pick from different categories so AI has options
         result = []
         seen_categories = set()
 
+        # First pass: one from each category
         for story in scored:
-            cat = story.get('category', 'tech')
-            # Ensure category variety in results
-            if len(result) < count:
-                # Prioritize diversity in first few
-                if cat not in seen_categories or len(result) >= count // 2:
-                    result.append(story)
-                    seen_categories.add(cat)
+            cat = story.get('category', 'unknown')
+            if cat not in seen_categories and len(result) < count:
+                result.append(story)
+                seen_categories.add(cat)
 
-        logger.info(f"Returning {len(result)} stories for AI selection")
+        # Second pass: fill remaining slots with top stories
+        for story in scored:
+            if story not in result and len(result) < count:
+                result.append(story)
+
+        logger.info(f"Returning {len(result)} diverse stories for AI to evaluate")
         return result[:count]
 
     def validate_url(self, url: str) -> bool:
