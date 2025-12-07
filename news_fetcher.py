@@ -399,45 +399,36 @@ class NewsFetcher:
         if not stories:
             return []
 
-        # DYNAMIC SCORING - Let AI be the judge, we just ensure variety
-        # Score based on: popularity (HN score), freshness, and variety
-        scored = []
-        for story in stories:
-            title_lower = story['title'].lower()
+        # NO PRE-SCORING OR FILTERING - AI decides what's interesting
+        # We just ensure variety so AI has options from different sources/topics
+        import random
+        random.shuffle(stories)  # Remove source bias
 
-            # Base score from source popularity (HN score, etc)
-            score = story.get('score', 0)
-
-            # Boost for engagement signals in title (dynamic, not keyword-locked)
-            engagement_signals = ['breaking', 'just', 'announces', 'reveals', 'launches',
-                                  'billion', 'million', 'dies', 'fired', 'quits', 'leaked',
-                                  'exclusive', 'first', 'new', 'warns', 'crashes', 'surges']
-            for signal in engagement_signals:
-                if signal in title_lower:
-                    score += 50  # Boost potentially viral content
-
-            scored.append({**story, 'relevance_score': score})
-
-        # Sort by score
-        scored.sort(key=lambda x: x['relevance_score'], reverse=True)
-
-        # ENSURE VARIETY - Pick from different categories so AI has options
+        # ENSURE VARIETY - Present diverse options, let AI pick
         result = []
         seen_categories = set()
+        seen_sources = set()
 
-        # First pass: one from each category
-        for story in scored:
+        # Pass 1: One from each category
+        for story in stories:
             cat = story.get('category', 'unknown')
             if cat not in seen_categories and len(result) < count:
                 result.append(story)
                 seen_categories.add(cat)
 
-        # Second pass: fill remaining slots with top stories
-        for story in scored:
+        # Pass 2: One from each source (for more variety)
+        for story in stories:
+            src = story.get('source', 'unknown')
+            if story not in result and src not in seen_sources and len(result) < count:
+                result.append(story)
+                seen_sources.add(src)
+
+        # Pass 3: Fill remaining slots
+        for story in stories:
             if story not in result and len(result) < count:
                 result.append(story)
 
-        logger.info(f"Returning {len(result)} diverse stories for AI to evaluate")
+        logger.info(f"Presenting {len(result)} diverse stories - AI decides what's engaging")
         return result[:count]
 
     def validate_url(self, url: str) -> bool:
