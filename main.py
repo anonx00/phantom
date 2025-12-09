@@ -9,10 +9,14 @@ from config import Config, get_secret
 # from brain import AgentBrain  # Moved to after scheduler check
 # from veo_client import VeoClient  # Imported when needed
 
-# Check for scheduling mode
+# Check for operational mode
 FORCE_POST = os.getenv("FORCE_POST", "false").lower() == "true"
 # Force video generation (bypasses format selection, useful for manual testing)
 FORCE_VIDEO = os.getenv("FORCE_VIDEO", "false").lower() == "true"
+# AI Mode: "post", "reply", or "auto" (AI decides)
+AI_MODE = os.getenv("AI_MODE", "auto").lower()
+# Enable reply functionality
+ENABLE_REPLIES = os.getenv("ENABLE_REPLIES", "true").lower() == "true"
 
 # Configure logging - will be enhanced with structured logging below
 logging.basicConfig(
@@ -89,23 +93,10 @@ def get_twitter_api():
 
 
 def main():
-    logger.info("Starting Tech Influencer Agent...")
+    logger.info("🤖 Starting AI Agent (BIG BOSS)...")
+    logger.info(f"Mode: {AI_MODE} | Replies: {'enabled' if ENABLE_REPLIES else 'disabled'}")
 
-    # COLD START OPTIMIZATION: Check scheduler FIRST before heavy initialization
-    # This avoids wasting API calls and compute time if we're not going to post
-    if not FORCE_POST:
-        from scheduler import should_post_lightweight
-        should_post, reason = should_post_lightweight()
-        if not should_post:
-            logger.info(f"Skipping post: {reason}")
-            logger.info("Set FORCE_POST=true to override scheduler")
-            logger.info("Cold start optimization: No heavy initialization performed")
-            sys.exit(0)  # Clean exit - not an error, minimal cost
-        logger.info(f"Scheduler approved: {reason}")
-    else:
-        logger.info("FORCE_POST enabled, bypassing scheduler check")
-
-    # 1. Validate Environment & Secrets (only after scheduler approves)
+    # 1. Validate Environment & Secrets
     try:
         Config.validate()
         api_v1, client_v2 = get_twitter_api()
@@ -113,8 +104,62 @@ def main():
         logger.critical(f"Initialization Error: {e}")
         sys.exit(1)
 
-    # 2. Initialize Brain (LAZY - only after we know we'll post)
-    # This is the expensive part: Vertex AI init, model discovery, Firestore
+    # 2. Initialize AI Agent Controller (budget & quota management)
+    logger.info("Initializing AI Agent Controller...")
+    try:
+        from ai_agent_controller import AIAgentController
+        controller = AIAgentController(project_id=Config.PROJECT_ID)
+
+        # Show daily summary
+        summary = controller.get_daily_summary()
+        logger.info(f"📊 Today's activity: {summary['posts']} posts, {summary['replies']} replies")
+        logger.info(f"   Twitter quota: {summary['twitter_quota_used']}")
+        logger.info(f"   Video budget: {summary['video_budget_used']}")
+    except Exception as e:
+        logger.critical(f"Failed to initialize controller: {e}")
+        sys.exit(1)
+
+    # 3. Decide what to do (AI-driven decision)
+    if AI_MODE == "auto":
+        # AI decides based on quotas and time of day
+        mode = controller.should_engage_mode()
+        logger.info(f"🧠 AI decided: {mode.upper()} mode")
+    elif AI_MODE in ["post", "reply"]:
+        mode = AI_MODE
+        logger.info(f"🎯 Forced mode: {mode.upper()}")
+    else:
+        mode = "post"  # Default
+        logger.info(f"⚠️ Unknown mode '{AI_MODE}', defaulting to POST")
+
+    # 4. Handle REPLY mode
+    if mode == "reply" and ENABLE_REPLIES:
+        return handle_reply_mode(api_v1, client_v2, controller)
+
+    # 5. Handle POST mode (original functionality)
+    if mode == "idle":
+        logger.info("😴 Idle mode - quotas exhausted or off-peak hours")
+        logger.info("Will try again later")
+        sys.exit(0)
+
+    # COLD START OPTIMIZATION: Check scheduler before heavy Brain initialization
+    if not FORCE_POST:
+        from scheduler import should_post_lightweight
+        should_post, reason = should_post_lightweight()
+        if not should_post:
+            logger.info(f"⏸️ Skipping post: {reason}")
+            logger.info("Set FORCE_POST=true to override scheduler")
+            sys.exit(0)
+        logger.info(f"✅ Scheduler approved: {reason}")
+    else:
+        logger.info("🚀 FORCE_POST enabled, bypassing scheduler")
+
+    # Check if we can post
+    can_post, post_reason = controller.can_create_post()
+    if not can_post:
+        logger.info(f"❌ Cannot post: {post_reason}")
+        sys.exit(0)
+
+    # 6. Initialize Brain (LAZY - only when actually posting)
     logger.info("Initializing AgentBrain (heavy initialization)...")
     try:
         from brain import AgentBrain
@@ -123,24 +168,90 @@ def main():
         logger.critical(f"Failed to initialize Brain: {e}")
         sys.exit(1)
 
+    # 7. Handle POST mode with zero-waste content generation
+    return handle_post_mode(api_v1, client_v2, brain, controller, FORCE_VIDEO)
+
+
+def handle_reply_mode(api_v1, client_v2, controller):
+    """
+    Handle reply mode: Check mentions and reply to worthy ones.
+
+    Returns:
+        Exit code
+    """
+    logger.info("💬 REPLY MODE: Checking mentions...")
+
+    try:
+        # Initialize Brain for AI responses (lightweight - no video models)
+        from brain import AgentBrain
+        brain = AgentBrain()
+
+        # Initialize reply handler
+        from reply_handler import ReplyHandler
+        reply_handler = ReplyHandler(
+            api_v1=api_v1,
+            client_v2=client_v2,
+            controller=controller,
+            ai_generate_func=brain._generate_with_fallback,
+            bot_username="PatriotxSystem"
+        )
+
+        # Check mentions and reply
+        replies_sent = reply_handler.process_mentions_and_reply()
+
+        if replies_sent > 0:
+            logger.info(f"✅ Sent {replies_sent} replies")
+        else:
+            logger.info("No replies sent (no worthy mentions or quota exhausted)")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Reply mode failed: {e}")
+        return 1
+
+
+def handle_post_mode(api_v1, client_v2, brain, controller, force_video=False):
+    """
+    Handle post mode: Create and post content (original functionality).
+    Now with zero-waste optimization.
+
+    Returns:
+        Exit code
+    """
+    logger.info("📝 POST MODE: Creating content...")
+
     # 3. Get Strategy (may return None if no quality content available)
     try:
-        # Pass FORCE_VIDEO flag to force video generation
-        if FORCE_VIDEO:
-            logger.info("🎬 FORCE_VIDEO enabled - will generate video regardless of budget/AI decision")
-        strategy = brain.get_strategy(force_video=FORCE_VIDEO)
+        # Pass FORCE_VIDEO flag and controller for budget checks
+        if force_video:
+            logger.info("🎬 FORCE_VIDEO enabled")
+
+        strategy = brain.get_strategy(force_video=force_video)
 
         if strategy is None:
             logger.info("No quality content available - skipping this post cycle")
             logger.info("This is normal - we only post when we have good content")
-            sys.exit(0)  # Clean exit, not an error
+            return 0
 
         logger.info(f"Strategy decided: {strategy}")
+
+        # ZERO WASTE CHECK: Verify we can create media before generating
+        from ai_agent_controller import ZeroWasteContentStrategy
+        post_type = strategy.get("type")
+
+        if post_type in ["video", "image", "infographic"]:
+            if not ZeroWasteContentStrategy.should_create_media(post_type, controller):
+                # Budget limit hit - fall back to text
+                logger.warning(f"⚠️ {post_type.upper()} budget limit - falling back to text with URL")
+                strategy["type"] = "text"
+                post_type = "text"
+
     except Exception as e:
         logger.error(f"Failed to generate strategy: {e}")
-        sys.exit(1)
+        return 1
 
-    # 4. Execute Strategy
+    # 4. Execute Strategy (existing code continues...)
     try:
         if strategy["type"] == "video":
             video_path = None
@@ -149,15 +260,18 @@ def main():
                 from veo_client import VeoClient
                 veo = VeoClient(project_id=Config.PROJECT_ID, region=Config.REGION)
                 video_path = veo.generate_video(strategy["video_prompt"])
-                
+
                 # Upload Video (requires v1.1 API)
                 media = upload_media_v1(api_v1, video_path, chunked=True, media_category="tweet_video")
-                
+
                 # Post Tweet with Video (requires v2 API)
                 post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
                 logger.info("Video posted successfully!")
                 brain.log_post(strategy, success=True)
-                
+
+                # Record in controller
+                controller.record_post_created("video")
+
             except Exception as e:
                 logger.error(f"Video generation or upload failed: {e}")
                 logger.info("Falling back to text with URL...")
@@ -180,10 +294,11 @@ def main():
                     post_tweet_v2(client_v2, text=fallback_text)
                     logger.info("Posted text with URL after video failure")
                     brain.log_post(strategy, success=True, error=f"Video failed but posted text with URL. Error: {e}")
+                    controller.record_post_created("text")
                 except Exception as fallback_error:
                     logger.error(f"Fallback tweet also failed: {fallback_error}")
                     brain.log_post(strategy, success=False, error=f"Video and Fallback failed. Error: {e} | Fallback: {fallback_error}")
-                    sys.exit(1) # Fail job if even fallback fails
+                    return 1
 
             finally:
                 # Cleanup video file
@@ -229,6 +344,7 @@ def main():
                 post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
                 logger.info("Infographic posted successfully!")
                 brain.log_post(strategy, success=True)
+                controller.record_post_created("infographic")
 
             except Exception as e:
                 logger.error(f"Infographic generation or upload failed: {e}")
@@ -250,6 +366,7 @@ def main():
                     post_tweet_v2(client_v2, text=fallback_text)
                     logger.info("Posted text with URL after infographic failure")
                     brain.log_post(strategy, success=True, error=f"Infographic failed but posted text with URL. Error: {e}")
+                    controller.record_post_created("text")
                 except Exception as fallback_error:
                     logger.error(f"Fallback tweet also failed: {fallback_error}")
                     brain.log_post(strategy, success=False, error=f"Infographic and Fallback failed. Error: {e}")
@@ -286,6 +403,7 @@ def main():
                     logger.info(f"Tweet posted! Response: {response.data if hasattr(response, 'data') else response}")
                     logger.info(f"Meme posted successfully! Source: {strategy.get('meme_title', '')[:50]}")
                     brain.log_post(strategy, success=True)
+                    controller.record_post_created("meme")
                 else:
                     # No meme image - post as text (brain.py already set content)
                     logger.info("No meme image, posting as text")
@@ -295,6 +413,7 @@ def main():
                     post_tweet_v2(client_v2, text=content)
                     logger.info("Posted meme-style text successfully!")
                     brain.log_post(strategy, success=True)
+                    controller.record_post_created("text")
 
             except Exception as e:
                 logger.error(f"Meme posting failed: {e}")
@@ -306,6 +425,7 @@ def main():
                     post_tweet_v2(client_v2, text=content)
                     logger.info("Posted text fallback after meme failure")
                     brain.log_post(strategy, success=True, error=f"Meme failed, posted text. Error: {e}")
+                    controller.record_post_created("text")
                 except Exception as fallback_error:
                     logger.error(f"Fallback also failed: {fallback_error}")
                     brain.log_post(strategy, success=False, error=str(e))
@@ -336,6 +456,7 @@ def main():
                 post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
                 logger.info("Image posted successfully!")
                 brain.log_post(strategy, success=True)
+                controller.record_post_created("image")
 
             except Exception as e:
                 logger.error(f"Image generation or upload failed: {e}")
@@ -357,6 +478,7 @@ def main():
                     post_tweet_v2(client_v2, text=fallback_text)
                     logger.info("Posted text with URL after image failure")
                     brain.log_post(strategy, success=True, error=f"Image failed but posted text. Error: {e}")
+                    controller.record_post_created("text")
                 except Exception as fallback_error:
                     logger.error(f"Fallback tweet also failed: {fallback_error}")
                     brain.log_post(strategy, success=False, error=str(e))
@@ -383,6 +505,7 @@ def main():
                 response = post_tweet_v2(client_v2, text=thought_text)
                 logger.info(f"💭 AI Thought posted! ID: {response.data['id']}")
                 brain.log_post(strategy, success=True)
+                controller.record_post_created("text")
             except Exception as e:
                 logger.error(f"Failed to post AI thought: {e}")
                 brain.log_post(strategy, success=False, error=str(e))
@@ -414,10 +537,11 @@ def main():
                 
                 logger.info(f"Post successful! IDs: {posted_tweets}")
                 brain.log_post(strategy, success=True)
+                controller.record_post_created("text")
             except Exception as e:
                 logger.error(f"Failed to post text: {e}")
                 brain.log_post(strategy, success=False, error=f"Partial failure. Posted: {len(posted_tweets)}. Error: {e}")
-                sys.exit(1)
+                return 1
 
     except Exception as e:
         logger.critical(f"Critical execution error: {e}")
@@ -426,7 +550,10 @@ def main():
             brain.log_post(strategy, success=False, error=f"Critical Error: {e}")
         except Exception as log_err:
             logger.warning(f"Failed to log error to Firestore: {log_err}")
-        sys.exit(1)
+        return 1
+
+    # Success!
+    return 0
 
 if __name__ == "__main__":
     main()
