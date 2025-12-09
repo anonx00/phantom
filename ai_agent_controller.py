@@ -59,6 +59,11 @@ class AIAgentController:
         self.interactions_collection = self.db.collection("ai_memory")
         self.budget_collection = self.db.collection("budget_tracking")
 
+        # Initialize vector memory for AI context
+        from memory_system import VectorMemory
+        self.vector_memory = VectorMemory(project_id=project_id)
+        logger.info("✅ Vector memory initialized - AI has context awareness")
+
         # Daily counters (reset at midnight)
         self._today_str = self._get_today_str()
         self._daily_stats = self._load_daily_stats()

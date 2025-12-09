@@ -104,8 +104,8 @@ def main():
         logger.critical(f"Initialization Error: {e}")
         sys.exit(1)
 
-    # 2. Initialize AI Agent Controller (budget & quota management)
-    logger.info("Initializing AI Agent Controller...")
+    # 2. Initialize AI Agent Controller (budget & quota management + vector memory)
+    logger.info("Initializing AI Agent Controller with vector memory...")
     try:
         from ai_agent_controller import AIAgentController
         controller = AIAgentController(project_id=Config.PROJECT_ID)
@@ -115,6 +115,11 @@ def main():
         logger.info(f"📊 Today's activity: {summary['posts']} posts, {summary['replies']} replies")
         logger.info(f"   Twitter quota: {summary['twitter_quota_used']}")
         logger.info(f"   Video budget: {summary['video_budget_used']}")
+
+        # Show memory stats
+        memory_stats = controller.vector_memory.get_interaction_stats()
+        logger.info(f"🧠 AI Memory: {memory_stats.get('total_interactions', 0)} total interactions stored")
+        logger.info(f"   Recent (24h): {memory_stats.get('recent_count_24h', 0)} interactions")
     except Exception as e:
         logger.critical(f"Failed to initialize controller: {e}")
         sys.exit(1)
@@ -265,12 +270,24 @@ def handle_post_mode(api_v1, client_v2, brain, controller, force_video=False):
                 media = upload_media_v1(api_v1, video_path, chunked=True, media_category="tweet_video")
 
                 # Post Tweet with Video (requires v2 API)
-                post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
-                logger.info("Video posted successfully!")
+                response = post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
+                posted_id = response.data['id']
+                logger.info(f"Video posted successfully! ID: {posted_id}")
                 brain.log_post(strategy, success=True)
 
                 # Record in controller
                 controller.record_post_created("video")
+
+                # Store in vector memory for AI context
+                from post_memory_tracker import PostMemoryTracker
+                memory_tracker = PostMemoryTracker(controller.vector_memory)
+                memory_tracker.store_post(
+                    post_id=posted_id,
+                    content=strategy["content"],
+                    post_type="video",
+                    topic=strategy.get("topic"),
+                    metadata={"video_prompt": strategy.get("video_prompt", "")[:100]}
+                )
 
             except Exception as e:
                 logger.error(f"Video generation or upload failed: {e}")

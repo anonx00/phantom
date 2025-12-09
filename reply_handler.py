@@ -59,6 +59,10 @@ class ReplyHandler:
         self.db = firestore.Client(project=Config.PROJECT_ID)
         self.interactions_collection = self.db.collection("ai_memory")
 
+        # Use vector memory from controller for rich context
+        self.vector_memory = controller.vector_memory
+        logger.info("🧠 Reply handler using vector memory for context")
+
         # Get bot user ID
         self._bot_user_id = None
 
@@ -194,25 +198,23 @@ class ReplyHandler:
         Returns:
             (should_reply, reason)
         """
-        # Check if we've already interacted with this tweet
-        try:
-            existing = self.interactions_collection.document(mention["tweet_id"]).get()
-            if existing.exists:
-                return False, "Already interacted with this tweet"
-        except Exception as e:
-            logger.warning(f"Could not check existing interaction: {e}")
+        # Check if we've already interacted with this tweet (using vector memory)
+        if self.vector_memory.has_interacted_with(mention["tweet_id"]):
+            return False, "Already interacted with this tweet"
 
-        # Get context about this user's past interactions
-        user_context = self._get_user_context(mention["author_username"])
+        # Get rich context from vector memory
+        from memory_system import ConversationContext
+        context_builder = ConversationContext(self.vector_memory)
+
+        rich_context = context_builder.build_reply_context(
+            tweet_id=mention["tweet_id"],
+            author=mention["author_username"],
+            content=mention["text"]
+        )
 
         prompt = f"""You control @{self.bot_username}. Someone mentioned you. Decide if you should reply.
 
-MENTION:
-From: @{mention['author_username']} ({mention['author_name']})
-Followers: {mention['author_followers']}
-Text: {mention['text']}
-
-{user_context}
+{rich_context}
 
 YOUR PERSONA: BIG BOSS - war-weary tech veteran, dry wit, cynical but not bitter.
 
@@ -253,7 +255,7 @@ REASON: <one sentence why>"""
 
     def generate_reply(self, mention: Dict) -> Optional[str]:
         """
-        AI generates a reply to the mention.
+        AI generates a reply to the mention with full context awareness.
 
         Args:
             mention: Mention dict
@@ -261,15 +263,19 @@ REASON: <one sentence why>"""
         Returns:
             Reply text or None
         """
-        # Get user context
-        user_context = self._get_user_context(mention["author_username"])
+        # Get rich context from vector memory
+        from memory_system import ConversationContext
+        context_builder = ConversationContext(self.vector_memory)
+
+        rich_context = context_builder.build_reply_context(
+            tweet_id=mention["tweet_id"],
+            author=mention["author_username"],
+            content=mention["text"]
+        )
 
         prompt = f"""Generate a reply to this mention as @{self.bot_username}.
 
-THEY SAID:
-@{mention['author_username']}: {mention['text']}
-
-{user_context}
+{rich_context}
 
 YOUR PERSONA: BIG BOSS - war-weary tech veteran. Dry wit. Short and punchy.
 
@@ -347,21 +353,26 @@ Generate ONLY the reply text, nothing else:"""
         return False
 
     def _store_interaction(self, mention: Dict, reply: str, reply_id: str):
-        """Store interaction in Firestore for memory."""
+        """Store interaction in vector memory with embeddings."""
         try:
-            self.interactions_collection.document(mention["tweet_id"]).set({
-                "tweet_id": mention["tweet_id"],
-                "author": mention["author_username"],
-                "author_id": mention["author_id"],
-                "content": mention["text"],
-                "interaction_type": "reply",
-                "ai_response": reply,
-                "ai_response_id": reply_id,
-                "timestamp": firestore.SERVER_TIMESTAMP,
-                "author_followers": mention.get("author_followers", 0)
-            })
+            # Store in vector memory with embedding for similarity search
+            success = self.vector_memory.store_interaction(
+                tweet_id=mention["tweet_id"],
+                author=mention["author_username"],
+                content=mention["text"],
+                interaction_type="reply",
+                ai_response=reply,
+                metadata={
+                    "author_id": mention["author_id"],
+                    "ai_response_id": reply_id,
+                    "author_followers": mention.get("author_followers", 0)
+                }
+            )
 
-            logger.info(f"💾 Stored interaction with @{mention['author_username']}")
+            if success:
+                logger.info(f"💾 Stored interaction with @{mention['author_username']} (with vector embedding)")
+            else:
+                logger.warning(f"Failed to store vector embedding, but interaction saved")
 
         except Exception as e:
             logger.error(f"Failed to store interaction: {e}")
@@ -426,14 +437,14 @@ Generate ONLY the reply text, nothing else:"""
                 logger.info(f"⏭️ Skipping @{mention['author_username']}: {decision_reason}")
                 # Still store that we saw it (to avoid re-processing)
                 try:
-                    self.interactions_collection.document(mention["tweet_id"]).set({
-                        "tweet_id": mention["tweet_id"],
-                        "author": mention["author_username"],
-                        "content": mention["text"],
-                        "interaction_type": "mention_ignored",
-                        "ai_decision": decision_reason,
-                        "timestamp": firestore.SERVER_TIMESTAMP
-                    })
+                    self.vector_memory.store_interaction(
+                        tweet_id=mention["tweet_id"],
+                        author=mention["author_username"],
+                        content=mention["text"],
+                        interaction_type="mention_ignored",
+                        ai_response=None,
+                        metadata={"ai_decision": decision_reason}
+                    )
                 except:
                     pass
                 continue
