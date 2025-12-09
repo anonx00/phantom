@@ -20,6 +20,14 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from abc import ABC, abstractmethod
 
+# Import cinematic director for AI-powered video prompts
+try:
+    from cinematic_director import CinematicDirector
+    CINEMATIC_DIRECTOR_AVAILABLE = True
+except ImportError:
+    CINEMATIC_DIRECTOR_AVAILABLE = False
+    CinematicDirector = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -425,6 +433,17 @@ class ContentResearcher:
         self._research_cache = {}
         self._cache_time = None
 
+        # Initialize cinematic director for production-quality video prompts
+        self.cinematic_director = None
+        if CINEMATIC_DIRECTOR_AVAILABLE:
+            try:
+                self.cinematic_director = CinematicDirector(ai_generate_func=generate_func)
+                logger.info("✅ CinematicDirector initialized - full AI creative control enabled")
+            except Exception as e:
+                logger.warning(f"Could not initialize CinematicDirector: {e}")
+        else:
+            logger.warning("CinematicDirector not available - using legacy video prompts")
+
     def research_topic(self, topic: str, context: str, category: str) -> Dict:
         """
         AI researches topic and decides best content format dynamically.
@@ -559,13 +578,50 @@ SUGGESTED_CAPTION: <caption or N/A>
 
     def generate_video_prompt(self, topic: str, context: str, style_notes: str) -> Optional[str]:
         """
-        Generate PURE ART video prompts dynamically using AI.
-        ZERO connection to news/topic - the tweet has the news, video is eye candy.
+        Generate PURE ART video prompts with AI in FULL creative control.
 
-        Uses extensive artistic seeds inspired by trending visual content and cinema.
-        Optimized for Veo 3 video generation with modern, engaging aesthetics.
+        Uses CinematicDirector for production-quality prompts with:
+        - AI choosing style (cyberpunk, hyperrealistic, etc.)
+        - AI choosing camera movements
+        - AI choosing lighting and color grading
+        - AI choosing mood and atmosphere
+
+        Optimized for Veo video generation with cinematic excellence.
         """
-        # EXPANDED artistic elements - inspired by trending Instagram, TikTok, and cinema
+        # Use CinematicDirector if available (PRODUCTION MODE)
+        if self.cinematic_director:
+            try:
+                logger.info("🎬 Using CinematicDirector for AI-powered creative direction...")
+
+                # Extract style hint from style_notes if provided
+                force_style = None
+                if style_notes and any(style in style_notes.lower() for style in
+                                      ['cyberpunk', 'hyperrealistic', 'surreal', 'noir']):
+                    # Extract the style from style_notes
+                    for style in ['cyberpunk', 'hyperrealistic', 'surreal', 'noir',
+                                 'solarpunk', 'vaporwave', 'brutalist', 'bioluminescent']:
+                        if style in style_notes.lower():
+                            force_style = style
+                            break
+
+                # Let AI decide EVERYTHING
+                video_prompt = self.cinematic_director.generate_video_prompt(
+                    topic=topic,
+                    context=context,
+                    force_style=force_style
+                )
+
+                if video_prompt and len(video_prompt) >= 50:
+                    logger.info(f"✅ CinematicDirector prompt: {video_prompt[:80]}...")
+                    return video_prompt
+
+            except Exception as e:
+                logger.warning(f"CinematicDirector failed, falling back to legacy: {e}")
+
+        # LEGACY FALLBACK (if CinematicDirector not available or fails)
+        logger.info("Using legacy video prompt generation...")
+
+        # EXPANDED artistic elements - inspired by trending visual content and cinema
         art_movements = [
             # Classic
             "Impressionism", "Surrealism", "Abstract Expressionism", "Minimalism",
@@ -642,12 +698,12 @@ Output ONLY the video prompt, nothing else:"""
             video_prompt = clean_ai_prompt(response, min_length=50)
 
             if video_prompt:
-                logger.info(f"AI generated art prompt: {video_prompt[:60]}...")
+                logger.info(f"Legacy AI generated prompt: {video_prompt[:60]}...")
                 return video_prompt
         except Exception as e:
-            logger.warning(f"AI video prompt generation failed: {e}")
+            logger.warning(f"Legacy video prompt generation failed: {e}")
 
-        # Fallback: construct from seeds directly
+        # Final fallback: construct from seeds directly
         fallback = f"{camera.capitalize()} capturing {subject}, inspired by {movement}, {mood}, volumetric lighting, shallow depth of field, cinematic"
         logger.info(f"Using seed-based fallback prompt: {fallback[:60]}...")
         return fallback
