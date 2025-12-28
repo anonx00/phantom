@@ -165,6 +165,49 @@ class ReplyHandler:
             # Get last processed mention ID
             since_id = self._get_last_mention_id()
 
+            # Try v1 API first (uses OAuth1 which works reliably)
+            try:
+                logger.info("Checking mentions via v1 API...")
+                params = {"count": 5, "tweet_mode": "extended"}
+                if since_id:
+                    params["since_id"] = since_id
+
+                mentions_response = self.api_v1.mentions_timeline(**params)
+
+                # Record that we made the API call
+                self.controller.record_mention_check()
+
+                if not mentions_response:
+                    logger.info("No new mentions found (v1 API)")
+                    return []
+
+                # Parse v1 mentions into our format
+                mentions = []
+                for tweet in mentions_response:
+                    mention = {
+                        "id": str(tweet.id),
+                        "text": tweet.full_text if hasattr(tweet, 'full_text') else tweet.text,
+                        "author_id": str(tweet.user.id),
+                        "author_username": tweet.user.screen_name,
+                        "author_name": tweet.user.name,
+                        "author_followers": tweet.user.followers_count,
+                        "created_at": tweet.created_at.isoformat() if tweet.created_at else None,
+                        "conversation_id": str(tweet.in_reply_to_status_id) if tweet.in_reply_to_status_id else str(tweet.id)
+                    }
+                    mentions.append(mention)
+
+                # Save latest mention ID
+                if mentions:
+                    latest_id = max(m["id"] for m in mentions)
+                    self._save_last_mention_id(latest_id)
+
+                logger.info(f"Found {len(mentions)} new mentions (v1 API)")
+                return mentions
+
+            except Exception as v1_error:
+                logger.warning(f"v1 API mentions failed: {v1_error}, trying v2...")
+
+            # Fallback to v2 API
             params = {
                 "id": user_id,
                 "max_results": 5,  # Conservative for FREE tier
@@ -190,12 +233,12 @@ class ReplyHandler:
             users_map = {}
 
             # Build user map
-            if hasattr(response, 'includes') and 'users' in response.includes:
+            if hasattr(response, 'includes') and response.includes and 'users' in response.includes:
                 for user in response.includes['users']:
-                    users_map[user.id] = {
+                    users_map[str(user.id)] = {
                         "username": user.username,
                         "name": user.name,
-                        "followers": user.public_metrics.get("followers_count", 0) if hasattr(user, 'public_metrics') else 0
+                        "followers": user.public_metrics.get("followers_count", 0) if hasattr(user, 'public_metrics') and user.public_metrics else 0
                     }
 
             for tweet in response.data:
