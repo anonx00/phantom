@@ -95,6 +95,7 @@ def get_twitter_api():
 def main():
     logger.info("🤖 Starting AI Agent (BIG BOSS)...")
     logger.info(f"Mode: {AI_MODE} | Replies: {'enabled' if ENABLE_REPLIES else 'disabled'}")
+    logger.info("Video source: CivitAI (FREE)")
 
     # 1. Validate Environment & Secrets
     try:
@@ -261,10 +262,13 @@ def handle_post_mode(api_v1, client_v2, brain, controller, force_video=False):
         if strategy["type"] == "video":
             video_path = None
             try:
-                # Lazy import VeoClient only when needed
-                from veo_client import VeoClient
-                veo = VeoClient(project_id=Config.PROJECT_ID, region=Config.REGION)
-                video_path = veo.generate_video(strategy["video_prompt"])
+                # Use CivitAI for free AI-generated videos (no Vertex AI costs)
+                logger.info("Downloading video from CivitAI (FREE)")
+                from civitai_downloader import CivitAIVideoDownloader
+                downloader = CivitAIVideoDownloader()
+                video_path = downloader.get_video_for_prompt(strategy.get("video_prompt", ""))
+                if not video_path:
+                    raise RuntimeError("Failed to download video from CivitAI")
 
                 # Upload Video (requires v1.1 API)
                 media = upload_media_v1(api_v1, video_path, chunked=True, media_category="tweet_video")

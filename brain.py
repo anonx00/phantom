@@ -1827,18 +1827,34 @@ Does it relate to actual topic "{topic}"? Are all claims real?
         if post_type == "video":
 
             # Generate caption ABOUT THE VIDEO ITSELF - NOT about news
-            # Video posts are pure art, caption describes the visual
-            caption_prompt = f"""Write a SHORT caption for this art video.
+            # Video posts are pure art - caption should be engaging and have personality
+            caption_prompt = f"""Write a caption for this AI-generated art video.
 
 VIDEO VISUAL: {video_prompt}
 
+You're a cynical tech veteran sharing mesmerizing AI art. Your voice is:
+- Dry wit, subtle irony, philosophical observation
+- Like a weary scientist who still finds beauty in chaos
+- NOT generic poetry, NOT "vibes only" captions
+
 Requirements:
-- Caption is ABOUT THE VIDEO ITSELF (the visual, the mood, the feeling)
-- NO news, NO topics, NO external references
-- Poetic, artistic, or contemplative tone
-- 30-80 characters MAX
+- 60-150 characters
+- Reference the visual in a clever/thoughtful way
+- Add a wry observation, existential musing, or dry commentary
 - NO hashtags, NO emojis
-- Examples: "Hypnotic.", "Time dissolves.", "Just breathe.", "Lost in this."
+- Sound like someone who's seen too much but still appreciates beauty
+
+Good examples:
+- "When the algorithm dreams, it dreams in fractals. Same, honestly."
+- "Spent $50k on art school. AI does this in 6 seconds. We're all coping."
+- "This is what my anxiety looks like at 3am. Beautiful, actually."
+- "Nature didn't make this. Neither did humans. We're just watching."
+- "The machine learning model having a better imagination than me. As expected."
+
+Bad examples (too generic):
+- "Mesmerizing." (too short, no personality)
+- "Hypnotic visuals." (boring)
+- "Lost in this." (empty)
 
 CAPTION:"""
 
@@ -1851,17 +1867,25 @@ CAPTION:"""
                     caption = caption[:97] + "..."
             except Exception as e:
                 logger.error(f"Caption generation failed: {e}")
-                # Fallback artistic captions
+                # Fallback captions with personality
                 import random
                 fallback_captions = [
-                    "Mesmerizing.", "Lost in this.", "Hypnotic.", "Just watch.",
-                    "Time stops.", "Pure flow.", "Breathe.", "Visual therapy."
+                    "AI dreaming in colors I can't name. Fair enough.",
+                    "This is what happens when machines get bored. Mood.",
+                    "Staring into the algorithmic void. The void stares back.",
+                    "Neural networks having a moment. Same energy, honestly.",
+                    "When the training data includes every sunset ever. Results.",
+                    "The machines are making art now. We're just watching.",
+                    "Silicon dreams hitting different today.",
+                    "This is my brain at 3am rendered by an AI. Accurate.",
+                    "When you train on the entire internet. This happens.",
+                    "AI art therapy session. Didn't ask for this. Don't hate it."
                 ]
                 caption = random.choice(fallback_captions)
 
             # Validate caption makes sense
-            if len(caption) < 5 or not caption:
-                caption = "Mesmerizing."
+            if len(caption) < 10 or not caption:
+                caption = "AI dreaming in colors I can't name. Fair enough."
 
             # VIDEO posts are pure art - NO URLs, NO news, just visual + caption
             strategy["content"] = caption
@@ -2242,7 +2266,7 @@ GENERATE YOUR THOUGHT:"""
                 logger.info(f"Using real URL: {story_url}")
                 post_prompt = f"""{BIG_BOSS_PERSONA}
 
-Write a tweet about this news.
+Write a tweet about this news. Make it INTERESTING - add your take, not just facts.
 
 CONTEXT:
 {story_context[:500]}
@@ -2250,15 +2274,24 @@ CONTEXT:
 Topic: "{topic}"
 URL: {story_url}
 
-STYLE EXAMPLES (write something SIMILAR, don't copy these literally):
-- "Another day, another data breach. Shocking."
-- "They raised $50M to do what Excel does. Incredible."
-- "The future is here. It costs $3000/month."
+GREAT TWEETS (study the structure, don't copy):
+- "$20B loophole. They'll call it 'innovation'." (cynical observation)
+- "They raised $50M to do what Excel does. VCs are just speedrunning irony at this point." (punchy take)
+- "Reusable rocket landing failed. Story of my deployment pipeline." (self-deprecating, relatable)
+- "Another day, another trillion-dollar company 'pivoting to AI'. The buzzword industrial complex never rests." (commentary with edge)
+- "The future arrived. It requires 8 different subscriptions and your firstborn." (dry observation)
+
+BAD TWEETS (avoid these):
+- Just stating facts with no take ("Company X releases Y. Interesting.")
+- Ending with generic phrases ("The cycle continues." "Time will tell.")
+- Obvious observations ("This is big." "Huge news.")
+- Marketing speak ("Revolutionary!" "Game-changing!")
 
 RULES:
 - Under 280 chars total (including URL)
-- Include the URL
-- Short, punchy, no hype
+- Include the URL at the end
+- ADD YOUR TAKE - observation, irony, commentary
+- Make someone want to engage or RT
 - NO hashtags, NO emojis
 
 TWEET:
@@ -2269,14 +2302,23 @@ TWEET:
 
 Write a tweet about: {topic}
 
-STYLE:
-- Observation or cynical take
-- Short and punchy
-- No corporate speak
+Make it memorable. Give your TAKE, not just facts.
+
+GREAT TWEETS (study structure, don't copy):
+- "Everyone's an AI expert now. The Dunning-Kruger singularity arrived before the real one."
+- "Web3 promised to decentralize the internet. It centralized the grift instead."
+- "The metaverse was supposed to be the future. It turned into a ghost town with expensive real estate."
+- "Every startup deck: 'We're Uber for X'. Every outcome: 'We're Theranos for X'."
+
+BAD TWEETS:
+- Generic observations with no edge
+- Ending with "Time will tell" or "The cycle continues"
+- Just stating what happened
 
 RULES:
 - Under 280 chars
 - NO hashtags, NO emojis, NO URLs
+- Must have a take, angle, or observation worth reading
 
 TWEET:
 """
