@@ -17,7 +17,7 @@ ZERO WASTE:
 
 import logging
 import tweepy
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 from google.cloud import firestore
 from config import Config
