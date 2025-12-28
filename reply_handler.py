@@ -67,15 +67,55 @@ class ReplyHandler:
         self._bot_user_id = None
 
     def _get_bot_user_id(self) -> Optional[str]:
-        """Get bot's Twitter user ID."""
+        """Get bot's Twitter user ID (cached in Firestore to save API calls)."""
         if self._bot_user_id:
             return self._bot_user_id
 
+        # Try to get from Firestore cache first
         try:
-            me = self.client_v2.get_user(username=self.bot_username)
+            doc = self.db.collection("system_state").document("bot_user_id").get()
+            if doc.exists:
+                cached_id = doc.to_dict().get("user_id")
+                if cached_id:
+                    self._bot_user_id = cached_id
+                    logger.info(f"Bot user ID (cached): {self._bot_user_id}")
+                    return self._bot_user_id
+        except Exception as e:
+            logger.debug(f"Cache miss for bot user ID: {e}")
+
+        # Try v1 API (uses OAuth1 which we have)
+        try:
+            me = self.api_v1.verify_credentials()
+            if me:
+                self._bot_user_id = str(me.id)
+                logger.info(f"Bot user ID (v1 API): {self._bot_user_id}")
+                # Cache it in Firestore
+                try:
+                    self.db.collection("system_state").document("bot_user_id").set({
+                        "user_id": self._bot_user_id,
+                        "username": me.screen_name,
+                        "cached_at": firestore.SERVER_TIMESTAMP
+                    })
+                except Exception:
+                    pass  # Non-critical
+                return self._bot_user_id
+        except Exception as e:
+            logger.warning(f"v1 API failed to get user ID: {e}")
+
+        # Fallback: try v2 get_me() which uses user context
+        try:
+            me = self.client_v2.get_me()
             if me and me.data:
-                self._bot_user_id = me.data.id
-                logger.info(f"Bot user ID: {self._bot_user_id}")
+                self._bot_user_id = str(me.data.id)
+                logger.info(f"Bot user ID (v2 get_me): {self._bot_user_id}")
+                # Cache it
+                try:
+                    self.db.collection("system_state").document("bot_user_id").set({
+                        "user_id": self._bot_user_id,
+                        "cached_at": firestore.SERVER_TIMESTAMP
+                    })
+                except Exception:
+                    pass
                 return self._bot_user_id
         except Exception as e:
             logger.error(f"Failed to get bot user ID: {e}")
