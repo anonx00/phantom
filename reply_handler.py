@@ -267,7 +267,17 @@ class ReplyHandler:
         except tweepy.errors.TooManyRequests:
             logger.warning("Rate limited by Twitter API")
             return []
+        except tweepy.errors.Forbidden as e:
+            logger.warning(f"Mentions API access denied (FREE tier limitation): {e}")
+            return None  # Signal API access issue
+        except tweepy.errors.Unauthorized as e:
+            logger.warning(f"Mentions API unauthorized: {e}")
+            return None  # Signal API access issue
         except Exception as e:
+            error_msg = str(e).lower()
+            if '403' in error_msg or '401' in error_msg or 'forbidden' in error_msg or 'unauthorized' in error_msg:
+                logger.warning(f"Mentions API access issue: {e}")
+                return None  # Signal API access issue
             logger.error(f"Failed to check mentions: {e}")
             return []
 
@@ -496,10 +506,15 @@ Generate ONLY the reply text, nothing else:"""
         Main function: Check mentions and reply to worthy ones.
 
         Returns:
-            Number of replies sent
+            Number of replies sent, or -1 if API access denied (FREE tier limitation)
         """
         # Check mentions
         mentions = self.check_mentions()
+
+        # None means API access issue (should fall back to POST mode)
+        if mentions is None:
+            logger.warning("Mentions API not accessible - returning -1 to signal fallback")
+            return -1
 
         if not mentions:
             return 0

@@ -181,6 +181,7 @@ def main():
 def handle_reply_mode(api_v1, client_v2, controller):
     """
     Handle reply mode: Check mentions and reply to worthy ones.
+    Falls back to POST mode if mentions API is unavailable (FREE tier limitation).
 
     Returns:
         Exit code
@@ -207,13 +208,33 @@ def handle_reply_mode(api_v1, client_v2, controller):
 
         if replies_sent > 0:
             logger.info(f"✅ Sent {replies_sent} replies")
-        else:
+        elif replies_sent == 0:
             logger.info("No replies sent (no worthy mentions or quota exhausted)")
+        elif replies_sent == -1:
+            # API access issue - fall back to post mode
+            logger.warning("⚠️ Mentions API not available on FREE tier, falling back to POST mode")
+            can_post, _ = controller.can_create_post()
+            if can_post:
+                return handle_post_mode(api_v1, client_v2, brain, controller, force_video=False)
 
         return 0
 
     except Exception as e:
-        logger.error(f"Reply mode failed: {e}")
+        error_msg = str(e).lower()
+        # Check if this is an API access issue
+        if '403' in error_msg or '401' in error_msg or 'forbidden' in error_msg or 'unauthorized' in error_msg:
+            logger.warning(f"⚠️ Reply mode unavailable (API access): {e}")
+            logger.info("Falling back to POST mode...")
+            try:
+                from brain import AgentBrain
+                brain = AgentBrain()
+                can_post, _ = controller.can_create_post()
+                if can_post:
+                    return handle_post_mode(api_v1, client_v2, brain, controller, force_video=False)
+            except Exception as fallback_err:
+                logger.error(f"Fallback to POST mode also failed: {fallback_err}")
+        else:
+            logger.error(f"Reply mode failed: {e}")
         return 1
 
 
