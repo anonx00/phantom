@@ -17,8 +17,6 @@ FORCE_VIDEO = os.getenv("FORCE_VIDEO", "false").lower() == "true"
 AI_MODE = os.getenv("AI_MODE", "auto").lower()
 # Enable reply functionality
 ENABLE_REPLIES = os.getenv("ENABLE_REPLIES", "true").lower() == "true"
-# Use CivitAI videos instead of Vertex AI (saves $$$)
-USE_CIVITAI_VIDEOS = os.getenv("USE_CIVITAI_VIDEOS", "false").lower() == "true"
 
 # Configure logging - will be enhanced with structured logging below
 logging.basicConfig(
@@ -97,7 +95,7 @@ def get_twitter_api():
 def main():
     logger.info("🤖 Starting AI Agent (BIG BOSS)...")
     logger.info(f"Mode: {AI_MODE} | Replies: {'enabled' if ENABLE_REPLIES else 'disabled'}")
-    logger.info(f"Video source: {'CivitAI (FREE)' if USE_CIVITAI_VIDEOS else 'Vertex AI (PAID)'}")
+    logger.info("Video source: CivitAI (FREE)")
 
     # 1. Validate Environment & Secrets
     try:
@@ -264,20 +262,13 @@ def handle_post_mode(api_v1, client_v2, brain, controller, force_video=False):
         if strategy["type"] == "video":
             video_path = None
             try:
-                # Check if we should use CivitAI (free) or Vertex AI (paid)
-                if USE_CIVITAI_VIDEOS:
-                    # Use CivitAI - download free AI-generated videos
-                    logger.info("Using CivitAI for video (free, saves Vertex AI costs)")
-                    from civitai_downloader import CivitAIVideoDownloader
-                    downloader = CivitAIVideoDownloader()
-                    video_path = downloader.get_video_for_prompt(strategy.get("video_prompt", ""))
-                    if not video_path:
-                        raise RuntimeError("Failed to download video from CivitAI")
-                else:
-                    # Use Vertex AI Veo (paid)
-                    from veo_client import VeoClient
-                    veo = VeoClient(project_id=Config.PROJECT_ID, region=Config.REGION)
-                    video_path = veo.generate_video(strategy["video_prompt"])
+                # Use CivitAI for free AI-generated videos (no Vertex AI costs)
+                logger.info("Downloading video from CivitAI (FREE)")
+                from civitai_downloader import CivitAIVideoDownloader
+                downloader = CivitAIVideoDownloader()
+                video_path = downloader.get_video_for_prompt(strategy.get("video_prompt", ""))
+                if not video_path:
+                    raise RuntimeError("Failed to download video from CivitAI")
 
                 # Upload Video (requires v1.1 API)
                 media = upload_media_v1(api_v1, video_path, chunked=True, media_category="tweet_video")
