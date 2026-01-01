@@ -43,10 +43,11 @@ class AIAgentController:
     }
 
     # BUDGET CONSTRAINTS (GCP)
+    # NOTE: Videos are now FREE via CivitAI downloads, so video limit is high
     BUDGET_LIMITS = {
         "monthly_budget_usd": 40,  # $60 AUD ≈ $40 USD
         "vertex_ai_calls_per_day_max": 50,  # Conservative limit
-        "video_generations_per_day_max": 2,  # Expensive, limit strictly
+        "video_generations_per_day_max": 10,  # FREE via CivitAI - post more videos!
         "image_generations_per_day_max": 4,  # Cheaper than video
     }
 
@@ -301,16 +302,16 @@ class AIAgentController:
         posts_today = self._daily_stats.get("posts_created", 0)
         replies_today = self._daily_stats.get("replies_created", 0)
 
-        if can_post and is_peak_hours and posts_today < 7:
-            # Post during peak hours, up to 7 posts/day
+        if can_post and is_peak_hours and posts_today < 12:
+            # Post during peak hours - more aggressive now that videos are FREE
             return "post"
 
         if can_check and can_reply_check and replies_today < 3:
             # Check for mentions to reply to (if we haven't hit reply limit)
             return "reply"
 
-        if can_post and posts_today < 12:
-            # Continue posting if under 12 posts/day
+        if can_post and posts_today < 16:
+            # Continue posting if under 16 posts/day (Twitter limit is 17)
             return "post"
 
         # Default to idle if quotas are getting tight

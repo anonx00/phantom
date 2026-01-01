@@ -57,13 +57,14 @@ class HumanScheduler:
         }
 
         # Post type preferences by time
+        # Videos are FREE via CivitAI - prioritize video content!
         self.time_preferences = {
-            'morning': ['text', 'infographic'],  # Quick reads in morning
-            'late_morning': ['video', 'image', 'infographic'],  # Visual content
-            'lunch': ['meme', 'text'],  # Light content at lunch
-            'afternoon': ['image', 'video', 'infographic'],  # Substantive content
-            'evening': ['video', 'meme', 'image'],  # Engaging evening content
-            'night': ['meme', 'text'],  # Quick late-night content
+            'morning': ['video', 'text', 'infographic'],  # Start with videos
+            'late_morning': ['video', 'video', 'image', 'infographic'],  # Heavy video
+            'lunch': ['video', 'meme', 'text'],  # Video even at lunch
+            'afternoon': ['video', 'video', 'image', 'infographic'],  # More videos
+            'evening': ['video', 'video', 'meme', 'image'],  # Peak engagement + videos
+            'night': ['video', 'meme', 'text'],  # Late night videos
         }
 
     def get_current_window(self) -> Optional[str]:
@@ -100,14 +101,15 @@ class HumanScheduler:
         window_weight = self.posting_windows[current_window]['weight']
 
         # Higher probability to ensure posts happen
-        # Base 70% * day_weight * normalized window weight
-        # Peak times (evening, afternoon) get ~80-90% probability
-        # Off-peak times get ~50-60% probability
+        # Base 85% * day_weight * normalized window weight
+        # Peak times (evening, afternoon) get ~90-95% probability
+        # Off-peak times get ~70-80% probability
+        # Videos are FREE now so post more aggressively
         normalized_weight = window_weight / 4  # max weight is 4
-        post_probability = 0.70 * day_weight * (0.7 + 0.3 * normalized_weight)
+        post_probability = 0.85 * day_weight * (0.8 + 0.2 * normalized_weight)
 
-        # Clamp between 40% and 95%
-        post_probability = max(0.40, min(0.95, post_probability))
+        # Clamp between 60% and 98%
+        post_probability = max(0.60, min(0.98, post_probability))
 
         # Random decision
         roll = random.random()
@@ -136,11 +138,12 @@ class HumanScheduler:
         day_of_week = now.weekday()
         day_weight = self.day_weights.get(day_of_week, 1.0)
 
-        # Base: 3-5 posts per day, modified by day weight
-        base_posts = random.randint(3, 5)
+        # Base: 8-12 posts per day, modified by day weight
+        # Videos are FREE via CivitAI so we can post more aggressively
+        base_posts = random.randint(8, 12)
         adjusted = int(base_posts * day_weight)
 
-        return max(1, adjusted)  # At least 1 post per day
+        return max(4, adjusted)  # At least 4 posts per day
 
     def get_next_post_delay(self) -> timedelta:
         """
@@ -161,12 +164,13 @@ class HumanScheduler:
             hours_until_morning = (24 - now.hour) + self.posting_windows['morning']['start']
             return timedelta(hours=hours_until_morning, minutes=random.randint(0, 30))
 
-        # Within posting hours, space posts naturally
-        # Human-like: 2-4 hours between posts with some variance
-        base_minutes = random.randint(90, 240)  # 1.5 to 4 hours
-        variance_minutes = random.randint(-30, 30)  # +/- 30 min variance
+        # Within posting hours, space posts more frequently
+        # More active posting: 45 min to 2 hours between posts
+        # Videos are FREE now so we can post more content
+        base_minutes = random.randint(45, 120)  # 45 min to 2 hours
+        variance_minutes = random.randint(-15, 15)  # +/- 15 min variance
 
-        return timedelta(minutes=max(60, base_minutes + variance_minutes))
+        return timedelta(minutes=max(30, base_minutes + variance_minutes))
 
     def generate_daily_schedule(self) -> List[Dict]:
         """
