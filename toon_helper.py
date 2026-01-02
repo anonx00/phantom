@@ -13,13 +13,14 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Try to import toon, fall back to JSON if not available
+# Note: toon-format package doesn't have a stable release yet
+# JSON fallback is the default and works fine
 try:
     from toon_format import encode as toon_encode, decode as toon_decode
     TOON_AVAILABLE = True
-    logger.info("✅ TOON format available - token-efficient encoding enabled")
 except ImportError:
     TOON_AVAILABLE = False
-    logger.warning("⚠️ toon-format not installed, falling back to JSON")
+    # JSON fallback is expected and silent - no warning needed
 
 
 def encode_for_llm(data: Any, use_toon: bool = True) -> str:

@@ -1,3 +1,10 @@
+"""
+Phantom AI Agent - POST Mode Only
+
+Simple, reliable posting of AI-generated content to Twitter/X.
+Video source: CivitAI (FREE)
+"""
+
 import os
 import sys
 import logging
@@ -5,27 +12,12 @@ import tweepy
 from tenacity import retry, stop_after_attempt, wait_exponential
 from config import Config, get_secret
 
-# Lazy imports for cold start optimization - only import heavy modules when needed
-# from brain import AgentBrain  # Moved to after scheduler check
-
-# Check for operational mode
+# Configuration
 FORCE_POST = os.getenv("FORCE_POST", "false").lower() == "true"
-# Force video generation (bypasses format selection, useful for manual testing)
 FORCE_VIDEO = os.getenv("FORCE_VIDEO", "false").lower() == "true"
-# AI Mode: "post", "reply", "scrape", or "auto" (AI decides)
-# NOTE: "scrape" mode no longer works - Twitter requires login for all content
-AI_MODE = os.getenv("AI_MODE", "post").lower()  # Default to POST (most reliable)
-# Enable reply functionality (API-based, works on FREE tier with limitations)
-ENABLE_REPLIES = os.getenv("ENABLE_REPLIES", "true").lower() == "true"
-# Enable scrape-based replies - DEPRECATED: Nitter no longer works
-# Twitter requires authentication to view any content as of late 2024
-ENABLE_SCRAPE_REPLIES = os.getenv("ENABLE_SCRAPE_REPLIES", "false").lower() == "true"
-# Use LangGraph agent for smarter decisions
-USE_LANGGRAPH = os.getenv("USE_LANGGRAPH", "false").lower() == "true"
-# Run data cleanup on startup (keeps Firestore lean)
 RUN_CLEANUP = os.getenv("RUN_CLEANUP", "true").lower() == "true"
 
-# Configure logging - will be enhanced with structured logging below
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -33,33 +25,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Try to enable structured logging for GCP Cloud Logging
+# Try GCP structured logging
 try:
     import google.cloud.logging
-    from google.cloud.logging.handlers import StructuredLogHandler
-
-    # Setup structured logging for GCP
     client = google.cloud.logging.Client()
     client.setup_logging()
-    logger.info("Structured logging enabled for GCP Cloud Logging")
-except ImportError:
-    logger.debug("google-cloud-logging not available, using standard logging")
-except Exception as e:
-    logger.warning(f"Could not setup GCP structured logging: {e}")
+except Exception:
+    pass  # Fall back to standard logging
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=60))
 def post_tweet_v2(client, text, **kwargs):
+    """Post tweet with retry logic."""
     return client.create_tweet(text=text, **kwargs)
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=4, max=60))
 def upload_media_v1(api, filename, **kwargs):
+    """Upload media with retry logic."""
     return api.media_upload(filename, **kwargs)
 
 
 def get_twitter_api():
-    """Authenticates with X (Twitter) API."""
+    """Authenticate with Twitter API."""
     required_secrets = [
         "TWITTER_CONSUMER_KEY",
         "TWITTER_CONSUMER_SECRET",
@@ -81,7 +69,6 @@ def get_twitter_api():
         secrets["TWITTER_ACCESS_TOKEN_SECRET"]
     )
 
-    # Create clients
     api_v1 = tweepy.API(auth)
     client_v2 = tweepy.Client(
         consumer_key=secrets["TWITTER_CONSUMER_KEY"],
@@ -90,599 +77,303 @@ def get_twitter_api():
         access_token_secret=secrets["TWITTER_ACCESS_TOKEN_SECRET"]
     )
 
-    # Verify credentials
-    try:
-        api_v1.verify_credentials()
-    except Exception as e:
-        raise ValueError(f"Twitter authentication failed: {e}")
-
+    api_v1.verify_credentials()
     return api_v1, client_v2
 
 
 def main():
-    logger.info("=" * 60)
-    logger.info("Starting AI Agent (BIG BOSS)")
-    logger.info("=" * 60)
-    logger.info(f"Mode: {AI_MODE.upper()}")
-    logger.info(f"Video source: CivitAI (FREE)")
-    logger.info(f"API-based replies: {'enabled' if ENABLE_REPLIES else 'disabled'}")
+    logger.info("=" * 50)
+    logger.info("Phantom AI Agent - POST Mode")
+    logger.info("=" * 50)
 
-    if ENABLE_SCRAPE_REPLIES:
-        logger.warning("Scrape mode enabled but DEPRECATED - Twitter requires login now")
-    else:
-        logger.info("Scrape mode: disabled (Twitter requires login)")
-
-    logger.info("-" * 60)
-
-    # 1. Validate Environment & Secrets
+    # 1. Initialize
     try:
         Config.validate()
         api_v1, client_v2 = get_twitter_api()
+        logger.info("Twitter API connected")
     except Exception as e:
-        logger.critical(f"Initialization Error: {e}")
+        logger.critical(f"Initialization failed: {e}")
         sys.exit(1)
 
-    # 1.5 Run data cleanup to keep Firestore lean
+    # 2. Data cleanup
     if RUN_CLEANUP:
         try:
             from data_retention import run_cleanup
-            cleanup_stats = run_cleanup(Config.PROJECT_ID)
-            if cleanup_stats["total_deleted"] > 0:
-                logger.info(f"🧹 Cleaned up {cleanup_stats['total_deleted']} old documents")
+            stats = run_cleanup(Config.PROJECT_ID)
+            if stats["total_deleted"] > 0:
+                logger.info(f"Cleaned up {stats['total_deleted']} old documents")
         except Exception as e:
-            logger.warning(f"Data cleanup failed (non-critical): {e}")
+            logger.warning(f"Cleanup failed (non-critical): {e}")
 
-    # 2. Initialize AI Agent Controller (budget & quota management + vector memory)
-    logger.info("Initializing AI Agent Controller with vector memory...")
+    # 3. Initialize controller
     try:
         from ai_agent_controller import AIAgentController
         controller = AIAgentController(project_id=Config.PROJECT_ID)
-
-        # Show daily summary
         summary = controller.get_daily_summary()
-        logger.info(f"📊 Today's activity: {summary['posts']} posts, {summary['replies']} replies")
-        logger.info(f"   Twitter quota: {summary['twitter_quota_used']}")
-        logger.info(f"   Video budget: {summary['video_budget_used']}")
-
-        # Show memory stats
-        memory_stats = controller.vector_memory.get_interaction_stats()
-        logger.info(f"🧠 AI Memory: {memory_stats.get('total_interactions', 0)} total interactions stored")
-        logger.info(f"   Recent (24h): {memory_stats.get('recent_count_24h', 0)} interactions")
+        logger.info(f"Today: {summary['posts']} posts, quota: {summary['twitter_quota_used']}")
     except Exception as e:
-        logger.critical(f"Failed to initialize controller: {e}")
+        logger.critical(f"Controller init failed: {e}")
         sys.exit(1)
 
-    # 3. Decide what to do (AI-driven decision)
-    if AI_MODE == "scrape":
-        # Direct scrape mode - bypass API for reading replies
-        logger.info("🔍 SCRAPE MODE: Scraping replies via Nitter...")
-        return handle_scrape_mode(api_v1, controller)
-
-    if AI_MODE == "auto":
-        # AI decides based on quotas and time of day
-        mode = controller.should_engage_mode()
-        logger.info(f"🧠 AI decided: {mode.upper()} mode")
-    elif AI_MODE in ["post", "reply"]:
-        mode = AI_MODE
-        logger.info(f"🎯 Forced mode: {mode.upper()}")
-    else:
-        mode = "post"  # Default
-        logger.info(f"⚠️ Unknown mode '{AI_MODE}', defaulting to POST")
-
-    # 4. Handle REPLY mode (try scrape-based first if enabled)
-    if mode == "reply" and ENABLE_SCRAPE_REPLIES:
-        logger.info("💬 Trying scrape-based reply mode first...")
-        result = handle_scrape_mode(api_v1, controller)
-        if result == 0:
-            return result
-        logger.info("Scrape mode didn't find replies, falling back to normal flow...")
-
-    # 5. Handle REPLY mode (API-based fallback)
-    if mode == "reply" and ENABLE_REPLIES:
-        return handle_reply_mode(api_v1, client_v2, controller)
-
-    # 5. Handle POST mode (original functionality)
-    if mode == "idle":
-        logger.info("😴 Idle mode - quotas exhausted or off-peak hours")
-        logger.info("Will try again later")
+    # 4. Check if we can post
+    can_post, reason = controller.can_create_post()
+    if not can_post:
+        logger.info(f"Cannot post: {reason}")
         sys.exit(0)
 
-    # COLD START OPTIMIZATION: Check scheduler before heavy Brain initialization
+    # 5. Check scheduler (unless forced)
     if not FORCE_POST:
         from scheduler import should_post_lightweight
         should_post, reason = should_post_lightweight()
         if not should_post:
-            logger.info(f"⏸️ Skipping post: {reason}")
-            logger.info("Set FORCE_POST=true to override scheduler")
+            logger.info(f"Scheduler: {reason}")
             sys.exit(0)
-        logger.info(f"✅ Scheduler approved: {reason}")
+        logger.info(f"Scheduler approved: {reason}")
     else:
-        logger.info("🚀 FORCE_POST enabled, bypassing scheduler")
+        logger.info("FORCE_POST enabled")
 
-    # Check if we can post
-    can_post, post_reason = controller.can_create_post()
-    if not can_post:
-        logger.info(f"❌ Cannot post: {post_reason}")
-        sys.exit(0)
-
-    # 6. Initialize Brain (LAZY - only when actually posting)
-    logger.info("Initializing AgentBrain (heavy initialization)...")
+    # 6. Initialize Brain
+    logger.info("Initializing Brain...")
     try:
         from brain import AgentBrain
         brain = AgentBrain()
     except Exception as e:
-        logger.critical(f"Failed to initialize Brain: {e}")
+        logger.critical(f"Brain init failed: {e}")
         sys.exit(1)
 
-    # 7. Handle POST mode with zero-waste content generation
-    return handle_post_mode(api_v1, client_v2, brain, controller, FORCE_VIDEO)
-
-
-def handle_scrape_mode(api_v1, controller):
-    """
-    Handle SCRAPE-REPLY mode: Scrape replies via Nitter and respond.
-
-    IMPORTANT: This sends REPLIES to users who commented on our posts.
-    These are NOT original posts - they are tracked separately.
-
-    Returns:
-        0 if successful (even if no replies found)
-        1 if error occurred
-    """
-    logger.info("[SCRAPE-REPLY] Checking for comments to reply to...")
-
+    # 7. Get content strategy
     try:
-        from reply_scraper import scrape_and_respond
-
-        # Get bot username from config or environment
-        bot_username = os.getenv("BOT_USERNAME", "PatriotxSystem")
-
-        # Run the scraper (replies are tracked in unified ReplyTracker)
-        replies_sent = scrape_and_respond(
-            username=bot_username,
-            project_id=Config.PROJECT_ID,
-            twitter_api_v1=api_v1,
-            max_responses=3  # Max 3 replies per scrape cycle
-        )
-
-        if replies_sent > 0:
-            logger.info(f"[SCRAPE-REPLY] Sent {replies_sent} REPLIES (not posts)")
-            # Note: replies are already recorded in scrape_and_respond
-            # We don't need to call controller.record_reply_created() here
-            # as it's handled in the unified tracker
-        else:
-            logger.info("[SCRAPE-REPLY] No new comments to reply to")
-
-        return 0
-
-    except Exception as e:
-        logger.error(f"[SCRAPE-REPLY] Failed: {e}")
-        return 1
-
-
-def handle_reply_mode(api_v1, client_v2, controller):
-    """
-    Handle API-REPLY mode: Check mentions via API and reply to worthy ones.
-
-    IMPORTANT: This sends REPLIES to users who mentioned us.
-    These are NOT original posts - they are tracked separately.
-    Falls back to POST mode if mentions API is unavailable (FREE tier limitation).
-
-    Returns:
-        Exit code
-    """
-    logger.info("[API-REPLY] Checking for mentions to reply to...")
-
-    try:
-        # Initialize Brain for AI responses (lightweight - no video models)
-        from brain import AgentBrain
-        brain = AgentBrain()
-
-        # Initialize reply handler (uses unified ReplyTracker)
-        from reply_handler import ReplyHandler
-        reply_handler = ReplyHandler(
-            api_v1=api_v1,
-            client_v2=client_v2,
-            controller=controller,
-            ai_generate_func=brain._generate_with_fallback,
-            bot_username="PatriotxSystem"
-        )
-
-        # Check mentions and reply
-        replies_sent = reply_handler.process_mentions_and_reply()
-
-        if replies_sent > 0:
-            logger.info(f"[API-REPLY] Sent {replies_sent} REPLIES (not posts)")
-        elif replies_sent == 0:
-            logger.info("[API-REPLY] No mentions worth replying to")
-        elif replies_sent == -1:
-            # API access issue - fall back to post mode
-            logger.warning("[API-REPLY] Mentions API blocked (FREE tier), falling back to POST mode")
-            can_post, _ = controller.can_create_post()
-            if can_post:
-                return handle_post_mode(api_v1, client_v2, brain, controller, force_video=False)
-
-        return 0
-
-    except Exception as e:
-        error_msg = str(e).lower()
-        # Check if this is an API access issue
-        if '403' in error_msg or '401' in error_msg or 'forbidden' in error_msg or 'unauthorized' in error_msg:
-            logger.warning(f"[API-REPLY] API access blocked: {e}")
-            logger.info("[API-REPLY] Falling back to POST mode...")
-            try:
-                from brain import AgentBrain
-                brain = AgentBrain()
-                can_post, _ = controller.can_create_post()
-                if can_post:
-                    return handle_post_mode(api_v1, client_v2, brain, controller, force_video=False)
-            except Exception as fallback_err:
-                logger.error(f"[POST] Fallback also failed: {fallback_err}")
-        else:
-            logger.error(f"[API-REPLY] Failed: {e}")
-        return 1
-
-
-def handle_post_mode(api_v1, client_v2, brain, controller, force_video=False):
-    """
-    Handle POST mode: Create and post ORIGINAL content (not replies).
-
-    IMPORTANT: This creates POSTS, not replies to other users.
-    Posts are tracked separately from replies in Firestore.
-
-    Returns:
-        Exit code
-    """
-    logger.info("[POST] Creating original content (not a reply)...")
-
-    # 3. Get Strategy (may return None if no quality content available)
-    try:
-        # Pass FORCE_VIDEO flag and controller for budget checks
-        if force_video:
-            logger.info("🎬 FORCE_VIDEO enabled")
-
-        strategy = brain.get_strategy(force_video=force_video)
-
+        strategy = brain.get_strategy(force_video=FORCE_VIDEO)
         if strategy is None:
-            logger.info("No quality content available - skipping this post cycle")
-            logger.info("This is normal - we only post when we have good content")
-            return 0
-
-        logger.info(f"Strategy decided: {strategy}")
-
-        # ZERO WASTE CHECK: Verify we can create media before generating
-        from ai_agent_controller import ZeroWasteContentStrategy
-        post_type = strategy.get("type")
-
-        if post_type in ["video", "image", "infographic"]:
-            if not ZeroWasteContentStrategy.should_create_media(post_type, controller):
-                # Budget limit hit - fall back to text
-                logger.warning(f"⚠️ {post_type.upper()} budget limit - falling back to text with URL")
-                strategy["type"] = "text"
-                post_type = "text"
-
+            logger.info("No quality content available - skipping")
+            sys.exit(0)
+        logger.info(f"Strategy: {strategy['type']}")
     except Exception as e:
-        logger.error(f"Failed to generate strategy: {e}")
-        return 1
+        logger.error(f"Strategy failed: {e}")
+        sys.exit(1)
 
-    # 4. Execute Strategy (existing code continues...)
+    # 8. Execute post
     try:
-        if strategy["type"] == "video":
-            video_path = None
-            try:
-                # Use CivitAI for free AI-generated videos (no Vertex AI costs)
-                logger.info("Downloading video from CivitAI (FREE)")
-                from civitai_downloader import CivitAIVideoDownloader
-                downloader = CivitAIVideoDownloader()
-                video_path = downloader.get_video_for_prompt(strategy.get("video_prompt", ""))
-                if not video_path:
-                    raise RuntimeError("Failed to download video from CivitAI")
+        post_type = strategy["type"]
 
-                # Upload Video (requires v1.1 API)
-                media = upload_media_v1(api_v1, video_path, chunked=True, media_category="tweet_video")
+        if post_type == "video":
+            post_video(api_v1, client_v2, brain, controller, strategy)
 
-                # Post Tweet with Video (requires v2 API)
-                response = post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
-                posted_id = response.data['id']
-                logger.info(f"Video posted successfully! ID: {posted_id}")
-                brain.log_post(strategy, success=True)
+        elif post_type == "infographic":
+            post_infographic(api_v1, client_v2, brain, controller, strategy)
 
-                # Record in controller
-                controller.record_post_created("video")
+        elif post_type == "meme":
+            post_meme(api_v1, client_v2, brain, controller, strategy)
 
-                # Store in vector memory for AI context
-                from post_memory_tracker import PostMemoryTracker
-                memory_tracker = PostMemoryTracker(controller.vector_memory)
-                memory_tracker.store_post(
-                    post_id=posted_id,
-                    content=strategy["content"],
-                    post_type="video",
-                    topic=strategy.get("topic"),
-                    metadata={"video_prompt": strategy.get("video_prompt", "")[:100]}
-                )
+        elif post_type == "image":
+            post_image(api_v1, client_v2, brain, controller, strategy)
 
-            except Exception as e:
-                logger.error(f"Video generation or upload failed: {e}")
-                logger.info("Falling back to text with URL...")
+        elif post_type == "thought":
+            post_thought(client_v2, brain, controller, strategy)
 
-                # Fallback logic - post text with URL (if available)
-                try:
-                    caption = strategy['content']
-                    source_url = strategy.get('source_url')
+        else:  # text, thread
+            post_text(client_v2, brain, controller, strategy)
 
-                    # If we have a URL, create proper fallback with citation
-                    if source_url:
-                        fallback_text = f"{caption}\n\n{source_url}"
-                        # Ensure under 280 chars
-                        if len(fallback_text) > 280:
-                            max_caption = 280 - len(source_url) - 4  # -4 for \n\n spacing
-                            fallback_text = f"{caption[:max_caption]}...\n\n{source_url}"
-                    else:
-                        fallback_text = caption
-
-                    post_tweet_v2(client_v2, text=fallback_text)
-                    logger.info("Posted text with URL after video failure")
-                    brain.log_post(strategy, success=True, error=f"Video failed but posted text with URL. Error: {e}")
-                    controller.record_post_created("text")
-                except Exception as fallback_error:
-                    logger.error(f"Fallback tweet also failed: {fallback_error}")
-                    brain.log_post(strategy, success=False, error=f"Video and Fallback failed. Error: {e} | Fallback: {fallback_error}")
-                    return 1
-
-            finally:
-                # Cleanup video file
-                if video_path and os.path.exists(video_path):
-                    try:
-                        os.remove(video_path)
-                        logger.info(f"Cleaned up video file: {video_path}")
-                    except Exception as cleanup_error:
-                        logger.warning(f"Failed to cleanup video file: {cleanup_error}")
-
-        elif strategy["type"] == "infographic":
-            # Handle infographic posts (educational content)
-            image_path = None
-            try:
-                # Use infographic generator with topic and key points
-                topic = strategy.get("topic", "Tech Trends")
-                key_points = strategy.get("key_points", [])
-                source_url = strategy.get("source_url")
-                image_prompt = strategy.get("image_prompt")
-
-                if brain.infographic_generator and not image_prompt:
-                    # Use dedicated infographic generator
-                    infographic_result = brain.generate_infographic(
-                        topic=topic,
-                        key_points=key_points,
-                        source_url=source_url
-                    )
-                    image_path = infographic_result.get('image_path')
-                    # Update caption if infographic generator provided one
-                    if infographic_result.get('content'):
-                        strategy['content'] = infographic_result['content']
-                else:
-                    # Use the image_prompt from strategy (generated by brain.get_strategy)
-                    # This uses the regular Imagen generator with infographic-specific prompt
-                    logger.info("Using Imagen with infographic prompt from strategy")
-                    prompt = image_prompt or f"Professional tech infographic about {topic}. Clean diagram, data visualization, educational content."
-                    image_path = brain.generate_image(prompt)
-
-                # Upload Image
-                media = upload_media_v1(api_v1, image_path)
-
-                # Post Tweet with Infographic
-                post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
-                logger.info("Infographic posted successfully!")
-                brain.log_post(strategy, success=True)
-                controller.record_post_created("infographic")
-
-            except Exception as e:
-                logger.error(f"Infographic generation or upload failed: {e}")
-                logger.info("Falling back to text with URL...")
-
-                # Fallback to text with URL
-                try:
-                    caption = strategy.get('content', strategy.get('topic', 'Tech update'))
-                    source_url = strategy.get('source_url')
-
-                    if source_url:
-                        fallback_text = f"{caption}\n\n{source_url}"
-                        if len(fallback_text) > 280:
-                            max_caption = 280 - len(source_url) - 4
-                            fallback_text = f"{caption[:max_caption]}...\n\n{source_url}"
-                    else:
-                        fallback_text = caption if len(caption) <= 280 else caption[:277] + "..."
-
-                    post_tweet_v2(client_v2, text=fallback_text)
-                    logger.info("Posted text with URL after infographic failure")
-                    brain.log_post(strategy, success=True, error=f"Infographic failed but posted text with URL. Error: {e}")
-                    controller.record_post_created("text")
-                except Exception as fallback_error:
-                    logger.error(f"Fallback tweet also failed: {fallback_error}")
-                    brain.log_post(strategy, success=False, error=f"Infographic and Fallback failed. Error: {e}")
-                    sys.exit(1)
-            finally:
-                if image_path and os.path.exists(image_path):
-                    try:
-                        os.remove(image_path)
-                    except Exception:
-                        pass
-
-        elif strategy["type"] == "meme":
-            # MEME: Use fetched meme from Reddit (meme_local_path) or fallback to text
-            image_path = strategy.get("meme_local_path")  # Pre-downloaded meme
-            try:
-                if image_path and os.path.exists(image_path):
-                    # We have a fetched meme - upload and post
-                    logger.info(f"Posting fetched meme from: {strategy.get('meme_source', 'Reddit')}")
-                    file_size = os.path.getsize(image_path)
-                    logger.info(f"Uploading meme file: {image_path} ({file_size} bytes)")
-
-                    # Upload media - use chunked upload for GIFs
-                    is_gif = image_path.lower().endswith('.gif')
-                    if is_gif:
-                        logger.info("Using chunked upload for GIF...")
-                        media = upload_media_v1(api_v1, image_path, chunked=True, media_category="tweet_gif")
-                    else:
-                        media = upload_media_v1(api_v1, image_path)
-
-                    logger.info(f"Media upload complete. media_id: {media.media_id}, media_id_string: {getattr(media, 'media_id_string', 'N/A')}")
-
-                    # Post tweet with media
-                    response = post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
-                    logger.info(f"Tweet posted! Response: {response.data if hasattr(response, 'data') else response}")
-                    logger.info(f"Meme posted successfully! Source: {strategy.get('meme_title', '')[:50]}")
-                    brain.log_post(strategy, success=True)
-                    controller.record_post_created("meme")
-                else:
-                    # No meme image - post as text (brain.py already set content)
-                    logger.info("No meme image, posting as text")
-                    content = strategy["content"]
-                    if isinstance(content, list):
-                        content = content[0]
-                    post_tweet_v2(client_v2, text=content)
-                    logger.info("Posted meme-style text successfully!")
-                    brain.log_post(strategy, success=True)
-                    controller.record_post_created("text")
-
-            except Exception as e:
-                logger.error(f"Meme posting failed: {e}")
-                # Fallback to text
-                try:
-                    content = strategy["content"]
-                    if isinstance(content, list):
-                        content = content[0]
-                    post_tweet_v2(client_v2, text=content)
-                    logger.info("Posted text fallback after meme failure")
-                    brain.log_post(strategy, success=True, error=f"Meme failed, posted text. Error: {e}")
-                    controller.record_post_created("text")
-                except Exception as fallback_error:
-                    logger.error(f"Fallback also failed: {fallback_error}")
-                    brain.log_post(strategy, success=False, error=str(e))
-                    sys.exit(1)
-            finally:
-                # Cleanup downloaded meme
-                if image_path and os.path.exists(image_path):
-                    try:
-                        os.remove(image_path)
-                        logger.info(f"Cleaned up meme file: {image_path}")
-                    except Exception as cleanup_err:
-                        logger.warning(f"Failed to cleanup meme file: {cleanup_err}")
-
-        elif strategy["type"] == "image":
-            # IMAGE: AI-generated image with Imagen
-            image_path = None
-            try:
-                image_prompt = strategy.get("image_prompt")
-                if not image_prompt:
-                    raise ValueError("Missing image_prompt for image post")
-
-                image_path = brain.generate_image(image_prompt)
-
-                # Upload Image
-                media = upload_media_v1(api_v1, image_path)
-
-                # Post Tweet with Image
-                post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
-                logger.info("Image posted successfully!")
-                brain.log_post(strategy, success=True)
-                controller.record_post_created("image")
-
-            except Exception as e:
-                logger.error(f"Image generation or upload failed: {e}")
-                logger.info("Falling back to text with URL...")
-
-                # Fallback to text with URL
-                try:
-                    caption = strategy['content']
-                    source_url = strategy.get('source_url')
-
-                    if source_url:
-                        fallback_text = f"{caption}\n\n{source_url}"
-                        if len(fallback_text) > 280:
-                            max_caption = 280 - len(source_url) - 4
-                            fallback_text = f"{caption[:max_caption]}...\n\n{source_url}"
-                    else:
-                        fallback_text = caption
-
-                    post_tweet_v2(client_v2, text=fallback_text)
-                    logger.info("Posted text with URL after image failure")
-                    brain.log_post(strategy, success=True, error=f"Image failed but posted text. Error: {e}")
-                    controller.record_post_created("text")
-                except Exception as fallback_error:
-                    logger.error(f"Fallback tweet also failed: {fallback_error}")
-                    brain.log_post(strategy, success=False, error=str(e))
-                    sys.exit(1)
-            finally:
-                if image_path and os.path.exists(image_path):
-                    try:
-                        os.remove(image_path)
-                    except Exception:
-                        pass
-
-        elif strategy["type"] == "thought":
-            # THOUGHT: AI musings/reflections - simple text post
-            thought_text = strategy["content"]
-            if isinstance(thought_text, list):
-                thought_text = thought_text[0]
-
-            try:
-                # Basic length check
-                if len(thought_text) > 280:
-                    logger.warning(f"Thought too long, truncating: {thought_text[:50]}...")
-                    thought_text = thought_text[:277] + "..."
-
-                response = post_tweet_v2(client_v2, text=thought_text)
-                logger.info(f"💭 AI Thought posted! ID: {response.data['id']}")
-                brain.log_post(strategy, success=True)
-                controller.record_post_created("text")
-            except Exception as e:
-                logger.error(f"Failed to post AI thought: {e}")
-                brain.log_post(strategy, success=False, error=str(e))
-                sys.exit(1)
-
-        elif strategy["type"] in ["thread", "text"]:
-            tweets = strategy["content"]
-            # Ensure it's a list
-            if isinstance(tweets, str):
-                tweets = [tweets]
-                
-            previous_tweet_id = None
-            posted_tweets = []
-            
-            try:
-                for tweet_text in tweets:
-                    # Basic length check
-                    if len(tweet_text) > 280:
-                        logger.warning(f"Tweet too long, truncating: {tweet_text[:50]}...")
-                        tweet_text = tweet_text[:277] + "..."
-                    
-                    if previous_tweet_id:
-                        response = post_tweet_v2(client_v2, text=tweet_text, in_reply_to_tweet_id=previous_tweet_id)
-                    else:
-                        response = post_tweet_v2(client_v2, text=tweet_text)
-                    
-                    previous_tweet_id = response.data['id']
-                    posted_tweets.append(previous_tweet_id)
-                
-                logger.info(f"Post successful! IDs: {posted_tweets}")
-                brain.log_post(strategy, success=True)
-                controller.record_post_created("text")
-            except Exception as e:
-                logger.error(f"Failed to post text: {e}")
-                brain.log_post(strategy, success=False, error=f"Partial failure. Posted: {len(posted_tweets)}. Error: {e}")
-                return 1
+        logger.info("Post complete!")
+        sys.exit(0)
 
     except Exception as e:
-        logger.critical(f"Critical execution error: {e}")
-        # Try to log to Firestore if possible
-        try:
-            brain.log_post(strategy, success=False, error=f"Critical Error: {e}")
-        except Exception as log_err:
-            logger.warning(f"Failed to log error to Firestore: {log_err}")
-        return 1
+        logger.error(f"Post failed: {e}")
+        sys.exit(1)
 
-    # Success!
-    return 0
+
+def post_video(api_v1, client_v2, brain, controller, strategy):
+    """Post video content."""
+    video_path = None
+    try:
+        from civitai_downloader import CivitAIVideoDownloader
+        downloader = CivitAIVideoDownloader()
+        video_path = downloader.get_video_for_prompt(strategy.get("video_prompt", ""))
+
+        if not video_path:
+            raise RuntimeError("CivitAI download failed")
+
+        media = upload_media_v1(api_v1, video_path, chunked=True, media_category="tweet_video")
+        response = post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
+
+        logger.info(f"Video posted: {response.data['id']}")
+        brain.log_post(strategy, success=True)
+        controller.record_post_created("video")
+
+    except Exception as e:
+        logger.error(f"Video failed: {e}")
+        post_fallback_text(client_v2, brain, controller, strategy, e)
+
+    finally:
+        if video_path and os.path.exists(video_path):
+            try:
+                os.remove(video_path)
+            except Exception:
+                pass
+
+
+def post_infographic(api_v1, client_v2, brain, controller, strategy):
+    """Post infographic content."""
+    image_path = None
+    try:
+        topic = strategy.get("topic", "Tech")
+        image_prompt = strategy.get("image_prompt") or f"Professional infographic about {topic}"
+        image_path = brain.generate_image(image_prompt)
+
+        media = upload_media_v1(api_v1, image_path)
+        post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
+
+        logger.info("Infographic posted")
+        brain.log_post(strategy, success=True)
+        controller.record_post_created("infographic")
+
+    except Exception as e:
+        logger.error(f"Infographic failed: {e}")
+        post_fallback_text(client_v2, brain, controller, strategy, e)
+
+    finally:
+        if image_path and os.path.exists(image_path):
+            try:
+                os.remove(image_path)
+            except Exception:
+                pass
+
+
+def post_meme(api_v1, client_v2, brain, controller, strategy):
+    """Post meme content."""
+    image_path = strategy.get("meme_local_path")
+    try:
+        if image_path and os.path.exists(image_path):
+            is_gif = image_path.lower().endswith('.gif')
+            if is_gif:
+                media = upload_media_v1(api_v1, image_path, chunked=True, media_category="tweet_gif")
+            else:
+                media = upload_media_v1(api_v1, image_path)
+
+            post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
+            logger.info("Meme posted")
+            brain.log_post(strategy, success=True)
+            controller.record_post_created("meme")
+        else:
+            # No image - post as text
+            content = strategy["content"]
+            if isinstance(content, list):
+                content = content[0]
+            post_tweet_v2(client_v2, text=content)
+            logger.info("Meme text posted")
+            brain.log_post(strategy, success=True)
+            controller.record_post_created("text")
+
+    except Exception as e:
+        logger.error(f"Meme failed: {e}")
+        content = strategy["content"]
+        if isinstance(content, list):
+            content = content[0]
+        try:
+            post_tweet_v2(client_v2, text=content)
+            brain.log_post(strategy, success=True, error=str(e))
+            controller.record_post_created("text")
+        except Exception:
+            raise
+
+    finally:
+        if image_path and os.path.exists(image_path):
+            try:
+                os.remove(image_path)
+            except Exception:
+                pass
+
+
+def post_image(api_v1, client_v2, brain, controller, strategy):
+    """Post AI-generated image."""
+    image_path = None
+    try:
+        image_prompt = strategy.get("image_prompt")
+        if not image_prompt:
+            raise ValueError("Missing image_prompt")
+
+        image_path = brain.generate_image(image_prompt)
+        media = upload_media_v1(api_v1, image_path)
+        post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
+
+        logger.info("Image posted")
+        brain.log_post(strategy, success=True)
+        controller.record_post_created("image")
+
+    except Exception as e:
+        logger.error(f"Image failed: {e}")
+        post_fallback_text(client_v2, brain, controller, strategy, e)
+
+    finally:
+        if image_path and os.path.exists(image_path):
+            try:
+                os.remove(image_path)
+            except Exception:
+                pass
+
+
+def post_thought(client_v2, brain, controller, strategy):
+    """Post AI thought/reflection."""
+    text = strategy["content"]
+    if isinstance(text, list):
+        text = text[0]
+
+    if len(text) > 280:
+        text = text[:277] + "..."
+
+    response = post_tweet_v2(client_v2, text=text)
+    logger.info(f"Thought posted: {response.data['id']}")
+    brain.log_post(strategy, success=True)
+    controller.record_post_created("text")
+
+
+def post_text(client_v2, brain, controller, strategy):
+    """Post text/thread content."""
+    tweets = strategy["content"]
+    if isinstance(tweets, str):
+        tweets = [tweets]
+
+    previous_id = None
+    for tweet_text in tweets:
+        if len(tweet_text) > 280:
+            tweet_text = tweet_text[:277] + "..."
+
+        if previous_id:
+            response = post_tweet_v2(client_v2, text=tweet_text, in_reply_to_tweet_id=previous_id)
+        else:
+            response = post_tweet_v2(client_v2, text=tweet_text)
+
+        previous_id = response.data['id']
+
+    logger.info(f"Text posted: {previous_id}")
+    brain.log_post(strategy, success=True)
+    controller.record_post_created("text")
+
+
+def post_fallback_text(client_v2, brain, controller, strategy, original_error):
+    """Fallback to text when media fails."""
+    try:
+        caption = strategy['content']
+        source_url = strategy.get('source_url')
+
+        if source_url:
+            text = f"{caption}\n\n{source_url}"
+            if len(text) > 280:
+                max_len = 280 - len(source_url) - 4
+                text = f"{caption[:max_len]}...\n\n{source_url}"
+        else:
+            text = caption if len(caption) <= 280 else caption[:277] + "..."
+
+        post_tweet_v2(client_v2, text=text)
+        logger.info("Fallback text posted")
+        brain.log_post(strategy, success=True, error=f"Media failed: {original_error}")
+        controller.record_post_created("text")
+
+    except Exception as e:
+        logger.error(f"Fallback also failed: {e}")
+        brain.log_post(strategy, success=False, error=str(original_error))
+        raise
+
 
 if __name__ == "__main__":
     main()
