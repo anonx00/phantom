@@ -1,22 +1,21 @@
 """
-LangGraph Agent - Sophisticated AI decision-making workflow
+LangGraph Agent - Agentic AI workflow for intelligent posting
 
-Replaces simple if/else logic with a graph-based agent that can:
-1. Gather context (trends, memory, mentions)
-2. Decide what action to take
-3. Execute with fallbacks
+Uses LangGraph for sophisticated decision-making:
+1. Gather context (trends, memory, daily stats)
+2. AI decides content type and topic
+3. Execute with quality checks
 4. Learn from results
 
 Graph structure:
-                    ┌─→ Scrape Replies ─→ Evaluate ─→ Respond
-                    │
-Entry ─→ Gather ────┼─→ Check Trends ─→ Pick Topic ─→ Generate ─→ Post
-                    │
-                    └─→ Review Memory ─→ Reflect ─→ Thought Post
+Entry -> Gather Context -> AI Decision -> Execute Post -> Finalize
+                              |
+                              v
+                     (video/image/meme/text/thought)
 """
 
 import logging
-from typing import TypedDict, Literal, Optional, List, Dict, Any
+from typing import TypedDict, Optional, List, Dict, Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -25,30 +24,31 @@ logger = logging.getLogger(__name__)
 try:
     from langgraph.graph import StateGraph, END
     LANGGRAPH_AVAILABLE = True
-    logger.info("✅ LangGraph available - advanced agent workflow enabled")
+    logger.info("LangGraph available - agentic workflow enabled")
 except ImportError:
     LANGGRAPH_AVAILABLE = False
-    logger.warning("⚠️ langgraph not installed, using simple workflow")
+    StateGraph = Any  # For type hints when not installed
+    END = None
+    logger.warning("langgraph not installed, using simple workflow")
 
 
 class AgentState(TypedDict):
     """State passed through the agent graph."""
     # Input
-    mode: str  # "auto", "post", "reply", "scrape"
     force_video: bool
 
     # Context gathered
     trends: List[Dict]
-    mentions: List[Dict]
     memory: List[Dict]
     daily_stats: Dict
 
     # Decision
-    action: str  # "post", "reply", "idle", "thought"
-    content_type: str  # "video", "text", "meme", etc.
+    action: str  # "post", "thought", "idle"
+    content_type: str  # "video", "image", "meme", "text", "thought"
     topic: Optional[str]
 
     # Execution
+    strategy: Optional[Dict]
     content: Optional[str]
     media_path: Optional[str]
     post_id: Optional[str]
@@ -56,25 +56,22 @@ class AgentState(TypedDict):
     # Result
     success: bool
     error: Optional[str]
-    tokens_used: int
 
 
 class PhantomAgentGraph:
     """
-    LangGraph-based agent for autonomous Twitter operation.
+    LangGraph-based agent for autonomous Twitter posting.
 
-    This provides:
+    Provides:
     - State management across steps
-    - Conditional branching based on context
-    - Automatic retries and fallbacks
-    - Memory of past decisions
+    - AI-powered content decisions based on trends
+    - Quality checks before posting
+    - Memory of past decisions for variety
     """
 
-    def __init__(self, brain, controller, api_v1, client_v2, project_id: str):
+    def __init__(self, brain, controller, project_id: str):
         self.brain = brain
         self.controller = controller
-        self.api_v1 = api_v1
-        self.client_v2 = client_v2
         self.project_id = project_id
 
         if LANGGRAPH_AVAILABLE:
@@ -84,137 +81,215 @@ class PhantomAgentGraph:
 
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph workflow."""
-
-        # Define the graph
         workflow = StateGraph(AgentState)
 
         # Add nodes
         workflow.add_node("gather_context", self._gather_context)
-        workflow.add_node("decide_action", self._decide_action)
-        workflow.add_node("execute_post", self._execute_post)
-        workflow.add_node("execute_reply", self._execute_reply)
-        workflow.add_node("execute_thought", self._execute_thought)
+        workflow.add_node("decide_content", self._decide_content)
+        workflow.add_node("generate_strategy", self._generate_strategy)
+        workflow.add_node("quality_check", self._quality_check)
         workflow.add_node("finalize", self._finalize)
 
         # Set entry point
         workflow.set_entry_point("gather_context")
 
         # Add edges
-        workflow.add_edge("gather_context", "decide_action")
+        workflow.add_edge("gather_context", "decide_content")
+        workflow.add_edge("decide_content", "generate_strategy")
 
-        # Conditional edges from decide_action
+        # Conditional edge from generate_strategy
         workflow.add_conditional_edges(
-            "decide_action",
-            self._route_action,
+            "generate_strategy",
+            self._route_after_strategy,
             {
-                "post": "execute_post",
-                "reply": "execute_reply",
-                "thought": "execute_thought",
-                "idle": "finalize"
+                "check": "quality_check",
+                "skip": "finalize"
             }
         )
 
-        # All execution nodes go to finalize
-        workflow.add_edge("execute_post", "finalize")
-        workflow.add_edge("execute_reply", "finalize")
-        workflow.add_edge("execute_thought", "finalize")
+        workflow.add_edge("quality_check", "finalize")
         workflow.add_edge("finalize", END)
 
         return workflow.compile()
 
     def _gather_context(self, state: AgentState) -> AgentState:
         """Gather context from all sources."""
-        logger.info("📊 Gathering context...")
+        logger.info("Gathering context...")
 
         # Get trends
         try:
             from trend_scraper import TrendScraper
             scraper = TrendScraper()
             state["trends"] = scraper.get_all_trends(limit_per_source=3)
+            logger.info(f"  Got {len(state['trends'])} trends")
         except Exception as e:
             logger.warning(f"Failed to get trends: {e}")
             state["trends"] = []
 
-        # Get mentions (via scraper)
+        # Get memory/past posts for variety
         try:
-            from reply_scraper import ReplyScraper
-            reply_scraper = ReplyScraper("PatriotxSystem", self.project_id)
-            state["mentions"] = reply_scraper.scrape_new_replies(max_tweets=5)
+            memory_data = {"recent_types": [], "last_topics": []}
+            # Try to get recent posts from Firestore
+            from google.cloud import firestore
+            db = firestore.Client(project=self.project_id)
+            posts = db.collection("posts").order_by(
+                "timestamp", direction=firestore.Query.DESCENDING
+            ).limit(5).stream()
+            for post in posts:
+                data = post.to_dict()
+                if data.get("type"):
+                    memory_data["recent_types"].append(data["type"])
+                if data.get("topic"):
+                    memory_data["last_topics"].append(data["topic"])
+            state["memory"] = memory_data
+            if memory_data["recent_types"]:
+                logger.info(f"  Recent types: {memory_data['recent_types'][:3]}")
         except Exception as e:
-            logger.warning(f"Failed to get mentions: {e}")
-            state["mentions"] = []
-
-        # Get memory
-        try:
-            memory_stats = self.controller.vector_memory.get_interaction_stats()
-            state["memory"] = memory_stats
-        except Exception as e:
-            state["memory"] = {}
+            logger.debug(f"Could not get recent posts: {e}")
+            state["memory"] = {"recent_types": [], "last_topics": []}
 
         # Get daily stats
         state["daily_stats"] = self.controller.get_daily_summary()
+        logger.info(f"  Today: {state['daily_stats'].get('posts', 0)} posts")
 
-        logger.info(f"   Trends: {len(state['trends'])}, Mentions: {len(state['mentions'])}")
         return state
 
-    def _decide_action(self, state: AgentState) -> AgentState:
-        """AI decides what action to take based on context."""
-        logger.info("🧠 AI deciding action...")
+    def _decide_content(self, state: AgentState) -> AgentState:
+        """AI decides what content type to create based on context."""
+        logger.info("AI deciding content type...")
 
-        # Use TOON to encode context efficiently
         from toon_helper import toon
+        from datetime import datetime
 
-        context = toon({
-            "trends": state["trends"][:5],
-            "mentions_count": len(state["mentions"]),
-            "daily_stats": state["daily_stats"],
-            "mode": state["mode"],
-            "force_video": state["force_video"]
-        })
+        # Check if we can post
+        can_post, reason = self.controller.can_create_post()
+        if not can_post:
+            state["action"] = "idle"
+            state["error"] = reason
+            logger.info(f"  Cannot post: {reason}")
+            return state
 
-        # Check constraints
-        can_post, post_reason = self.controller.can_create_post()
-        can_reply, reply_reason = self.controller.can_reply()
-
-        # Decision logic (AI-enhanced)
-        if state["mode"] == "scrape" or (state["mentions"] and can_reply):
-            state["action"] = "reply"
-        elif state["force_video"] and can_post:
+        # Force video if requested
+        if state["force_video"]:
             state["action"] = "post"
             state["content_type"] = "video"
-        elif can_post:
-            # Let AI decide content type based on trends
-            if state["trends"]:
-                # Pick a trending topic
-                top_trend = state["trends"][0]
-                state["topic"] = top_trend.get("topic", "")
+            state["topic"] = self._pick_topic_for_video(state["trends"])
+            logger.info(f"  Forced video on topic: {state['topic']}")
+            return state
 
-                # Video if crypto/tech trend, otherwise text
-                if top_trend.get("category") in ["crypto", "tech"]:
-                    state["content_type"] = "video"
-                else:
-                    state["content_type"] = "text"
-            else:
-                state["content_type"] = "text"
-            state["action"] = "post"
-        else:
-            state["action"] = "idle"
+        # Get context for smart decision
+        recent_types = state.get("memory", {}).get("recent_types", [])
+        last_topics = state.get("memory", {}).get("last_topics", [])
+        hour = datetime.now().hour
 
-        logger.info(f"   Decision: {state['action']} ({state.get('content_type', 'N/A')})")
+        # Smart content type selection with variety
+        content_type = self._smart_content_pick(
+            trends=state["trends"],
+            recent_types=recent_types,
+            hour=hour
+        )
+
+        # Pick topic avoiding recent ones
+        topic = self._smart_topic_pick(
+            trends=state["trends"],
+            last_topics=last_topics,
+            content_type=content_type
+        )
+
+        state["content_type"] = content_type
+        state["topic"] = topic
+        state["action"] = "post"
+
+        # Log context for debugging
+        logger.info(f"  Context: hour={hour}, recent={recent_types[:2]}")
+        logger.info(f"  Decision: {content_type} on '{topic or 'N/A'}'")
         return state
 
-    def _route_action(self, state: AgentState) -> str:
-        """Route to appropriate execution node."""
-        return state["action"]
+    def _smart_content_pick(self, trends: List[Dict], recent_types: List[str], hour: int) -> str:
+        """Pick content type based on trends, variety, and time."""
+        # Avoid repeating last content type
+        last_type = recent_types[0] if recent_types else None
 
-    def _execute_post(self, state: AgentState) -> AgentState:
-        """Execute a post action."""
-        logger.info(f"📝 Executing post: {state.get('content_type', 'text')}")
+        # Content type candidates based on trends
+        candidates = []
+        if trends:
+            top_category = trends[0].get("category", "general")
+            if top_category in ["crypto", "tech", "ai"]:
+                candidates = ["video", "text", "thought"]
+            elif top_category in ["meme", "viral"]:
+                candidates = ["meme", "text", "video"]
+            else:
+                candidates = ["text", "video", "thought"]
+        else:
+            candidates = ["thought", "text"]
+
+        # Time-based adjustments (engagement patterns)
+        # Peak hours (9-11am, 7-9pm) = video/visual content
+        # Off-peak = text/thoughts
+        if hour in [9, 10, 11, 19, 20, 21]:
+            # Boost video during peak
+            if "video" in candidates:
+                candidates.remove("video")
+                candidates.insert(0, "video")
+        elif hour in [0, 1, 2, 3, 4, 5]:
+            # Late night = thoughts
+            if "thought" in candidates:
+                candidates.remove("thought")
+                candidates.insert(0, "thought")
+
+        # Variety: skip last type if possible
+        if last_type in candidates and len(candidates) > 1:
+            candidates.remove(last_type)
+
+        return candidates[0] if candidates else "text"
+
+    def _smart_topic_pick(self, trends: List[Dict], last_topics: List[str], content_type: str) -> Optional[str]:
+        """Pick topic avoiding recent ones."""
+        if not trends:
+            return None
+
+        # Filter out recently used topics
+        available = [t for t in trends if t.get("topic", t.get("name", "")) not in last_topics]
+
+        # If all filtered, use all trends
+        if not available:
+            available = trends
+
+        # For video, prefer tech/crypto/ai categories
+        if content_type == "video":
+            tech_trends = [t for t in available if t.get("category") in ["crypto", "tech", "ai"]]
+            if tech_trends:
+                available = tech_trends
+
+        # Return first available
+        if available:
+            return available[0].get("topic", available[0].get("name", ""))
+        return None
+
+    def _pick_topic_for_video(self, trends: List[Dict]) -> str:
+        """Pick best topic for video content."""
+        if not trends:
+            return "AI and technology"
+
+        # Prefer crypto/tech/ai trends for video
+        for trend in trends:
+            cat = trend.get("category", "")
+            if cat in ["crypto", "tech", "ai"]:
+                return trend.get("topic", trend.get("name", "AI"))
+
+        # Fall back to first trend
+        return trends[0].get("topic", trends[0].get("name", "technology"))
+
+    def _generate_strategy(self, state: AgentState) -> AgentState:
+        """Generate content strategy using Brain."""
+        logger.info(f"Generating {state['content_type']} strategy...")
+
+        if state["action"] == "idle":
+            return state
 
         try:
-            # Get strategy from brain
             strategy = self.brain.get_strategy(
-                force_video=(state.get("content_type") == "video")
+                force_video=(state["content_type"] == "video")
             )
 
             if not strategy:
@@ -222,10 +297,10 @@ class PhantomAgentGraph:
                 state["error"] = "No quality content available"
                 return state
 
-            # Execute based on type (simplified - actual execution in main.py)
+            state["strategy"] = strategy
             state["content"] = strategy.get("content", "")
-            state["content_type"] = strategy.get("type", "text")
-            state["success"] = True
+            state["content_type"] = strategy.get("type", state["content_type"])
+            logger.info(f"  Strategy: {strategy.get('type')}")
 
         except Exception as e:
             state["success"] = False
@@ -233,130 +308,109 @@ class PhantomAgentGraph:
 
         return state
 
-    def _execute_reply(self, state: AgentState) -> AgentState:
-        """Execute reply action."""
-        logger.info("💬 Executing reply...")
+    def _route_after_strategy(self, state: AgentState) -> str:
+        """Route based on strategy result."""
+        if state.get("strategy"):
+            return "check"
+        return "skip"
 
-        try:
-            from reply_scraper import scrape_and_respond
+    def _quality_check(self, state: AgentState) -> AgentState:
+        """Quality check before posting."""
+        logger.info("Quality check...")
 
-            replies_sent = scrape_and_respond(
-                username="PatriotxSystem",
-                project_id=self.project_id,
-                twitter_api_v1=self.api_v1,
-                max_responses=3
-            )
+        strategy = state.get("strategy")
+        if not strategy:
+            return state
 
-            state["success"] = replies_sent >= 0
-            state["post_id"] = f"replies:{replies_sent}"
+        content = strategy.get("content", "")
 
-        except Exception as e:
+        # Check content length
+        if isinstance(content, str) and len(content) > 280:
+            logger.warning("  Content too long, will be truncated")
+
+        # Check for empty content
+        if not content:
             state["success"] = False
-            state["error"] = str(e)
+            state["error"] = "Empty content"
+            return state
 
-        return state
-
-    def _execute_thought(self, state: AgentState) -> AgentState:
-        """Execute a thought/reflection post."""
-        logger.info("💭 Executing thought post...")
-
-        try:
-            # Generate a thought based on trends
-            from toon_helper import toon
-
-            prompt = f"""Based on today's context, generate a thoughtful observation.
-
-{toon({"trends": state["trends"][:3]})}
-
-Write a single tweet (under 280 chars) that's:
-- Cynical but insightful
-- About tech/AI/crypto
-- No hashtags or emojis
-"""
-
-            thought = self.brain._generate_with_fallback(prompt)
-            state["content"] = thought[:280]
-            state["content_type"] = "thought"
-            state["success"] = True
-
-        except Exception as e:
-            state["success"] = False
-            state["error"] = str(e)
-
+        # Check for duplicate (could use vector memory)
+        # For now, just mark as ready
+        state["success"] = True
+        logger.info("  Quality check passed")
         return state
 
     def _finalize(self, state: AgentState) -> AgentState:
-        """Finalize the action and log results."""
-        if state["success"]:
-            logger.info(f"✅ Action completed: {state['action']}")
+        """Finalize and log results."""
+        if state.get("success") and state.get("strategy"):
+            logger.info(f"Ready to post: {state.get('content_type')}")
+        elif state.get("error"):
+            logger.warning(f"Workflow ended: {state.get('error')}")
         else:
-            logger.warning(f"❌ Action failed: {state.get('error', 'Unknown')}")
+            logger.info("Workflow complete (no action)")
 
         return state
 
-    def run(self, mode: str = "auto", force_video: bool = False) -> AgentState:
+    def run(self, force_video: bool = False) -> AgentState:
         """
         Run the agent graph.
 
         Args:
-            mode: "auto", "post", "reply", "scrape"
             force_video: Force video content
 
         Returns:
-            Final agent state
+            Final agent state with strategy if successful
         """
         initial_state: AgentState = {
-            "mode": mode,
             "force_video": force_video,
             "trends": [],
-            "mentions": [],
             "memory": [],
             "daily_stats": {},
             "action": "idle",
             "content_type": "text",
             "topic": None,
+            "strategy": None,
             "content": None,
             "media_path": None,
             "post_id": None,
             "success": False,
-            "error": None,
-            "tokens_used": 0
+            "error": None
         }
 
         if self.graph:
             # Run LangGraph workflow
+            logger.info("Running LangGraph workflow...")
             final_state = self.graph.invoke(initial_state)
             return final_state
         else:
-            # Fallback: simple execution
-            logger.info("Using simple workflow (LangGraph not available)")
+            # Fallback: simple execution without LangGraph
+            logger.info("Running simple workflow (LangGraph not available)")
             state = self._gather_context(initial_state)
-            state = self._decide_action(state)
-
-            if state["action"] == "post":
-                state = self._execute_post(state)
-            elif state["action"] == "reply":
-                state = self._execute_reply(state)
-            elif state["action"] == "thought":
-                state = self._execute_thought(state)
-
+            state = self._decide_content(state)
+            state = self._generate_strategy(state)
+            if state.get("strategy"):
+                state = self._quality_check(state)
             state = self._finalize(state)
             return state
 
 
-def run_agent(brain, controller, api_v1, client_v2, project_id: str,
-              mode: str = "auto", force_video: bool = False) -> Dict:
+def run_agent(brain, controller, project_id: str,
+              force_video: bool = False) -> Dict:
     """
     Convenience function to run the agent.
 
-    Returns dict with success status and details.
+    Returns dict with:
+    - success: bool
+    - strategy: dict (if successful)
+    - error: str (if failed)
     """
-    agent = PhantomAgentGraph(brain, controller, api_v1, client_v2, project_id)
-    result = agent.run(mode=mode, force_video=force_video)
+    agent = PhantomAgentGraph(brain, controller, project_id)
+    result = agent.run(force_video=force_video)
 
     return {
-        "success": result["success"],
-        "action": result["action"],
+        "success": result.get("success", False),
+        "strategy": result.get("strategy"),
         "content_type": result.get("content_type"),
+        "topic": result.get("topic"),
         "error": result.get("error")
     }
