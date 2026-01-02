@@ -19,6 +19,10 @@ AI_MODE = os.getenv("AI_MODE", "auto").lower()
 ENABLE_REPLIES = os.getenv("ENABLE_REPLIES", "true").lower() == "true"
 # Enable scrape-based replies (bypasses Twitter API for reading)
 ENABLE_SCRAPE_REPLIES = os.getenv("ENABLE_SCRAPE_REPLIES", "true").lower() == "true"
+# Use LangGraph agent for smarter decisions
+USE_LANGGRAPH = os.getenv("USE_LANGGRAPH", "false").lower() == "true"
+# Run data cleanup on startup (keeps Firestore lean)
+RUN_CLEANUP = os.getenv("RUN_CLEANUP", "true").lower() == "true"
 
 # Configure logging - will be enhanced with structured logging below
 logging.basicConfig(
@@ -97,6 +101,7 @@ def get_twitter_api():
 def main():
     logger.info("🤖 Starting AI Agent (BIG BOSS)...")
     logger.info(f"Mode: {AI_MODE} | Replies: {'enabled' if ENABLE_REPLIES else 'disabled'} | Scrape: {'enabled' if ENABLE_SCRAPE_REPLIES else 'disabled'}")
+    logger.info(f"LangGraph: {'enabled' if USE_LANGGRAPH else 'disabled'} | Cleanup: {'enabled' if RUN_CLEANUP else 'disabled'}")
     logger.info("Video source: CivitAI (FREE)")
 
     # 1. Validate Environment & Secrets
@@ -106,6 +111,16 @@ def main():
     except Exception as e:
         logger.critical(f"Initialization Error: {e}")
         sys.exit(1)
+
+    # 1.5 Run data cleanup to keep Firestore lean
+    if RUN_CLEANUP:
+        try:
+            from data_retention import run_cleanup
+            cleanup_stats = run_cleanup(Config.PROJECT_ID)
+            if cleanup_stats["total_deleted"] > 0:
+                logger.info(f"🧹 Cleaned up {cleanup_stats['total_deleted']} old documents")
+        except Exception as e:
+            logger.warning(f"Data cleanup failed (non-critical): {e}")
 
     # 2. Initialize AI Agent Controller (budget & quota management + vector memory)
     logger.info("Initializing AI Agent Controller with vector memory...")
