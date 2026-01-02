@@ -13,10 +13,16 @@ from config import Config, get_secret
 FORCE_POST = os.getenv("FORCE_POST", "false").lower() == "true"
 # Force video generation (bypasses format selection, useful for manual testing)
 FORCE_VIDEO = os.getenv("FORCE_VIDEO", "false").lower() == "true"
-# AI Mode: "post", "reply", or "auto" (AI decides)
+# AI Mode: "post", "reply", "scrape", or "auto" (AI decides)
 AI_MODE = os.getenv("AI_MODE", "auto").lower()
 # Enable reply functionality
 ENABLE_REPLIES = os.getenv("ENABLE_REPLIES", "true").lower() == "true"
+# Enable scrape-based replies (bypasses Twitter API for reading)
+ENABLE_SCRAPE_REPLIES = os.getenv("ENABLE_SCRAPE_REPLIES", "true").lower() == "true"
+# Use LangGraph agent for smarter decisions
+USE_LANGGRAPH = os.getenv("USE_LANGGRAPH", "false").lower() == "true"
+# Run data cleanup on startup (keeps Firestore lean)
+RUN_CLEANUP = os.getenv("RUN_CLEANUP", "true").lower() == "true"
 
 # Configure logging - will be enhanced with structured logging below
 logging.basicConfig(
@@ -94,7 +100,8 @@ def get_twitter_api():
 
 def main():
     logger.info("🤖 Starting AI Agent (BIG BOSS)...")
-    logger.info(f"Mode: {AI_MODE} | Replies: {'enabled' if ENABLE_REPLIES else 'disabled'}")
+    logger.info(f"Mode: {AI_MODE} | Replies: {'enabled' if ENABLE_REPLIES else 'disabled'} | Scrape: {'enabled' if ENABLE_SCRAPE_REPLIES else 'disabled'}")
+    logger.info(f"LangGraph: {'enabled' if USE_LANGGRAPH else 'disabled'} | Cleanup: {'enabled' if RUN_CLEANUP else 'disabled'}")
     logger.info("Video source: CivitAI (FREE)")
 
     # 1. Validate Environment & Secrets
@@ -104,6 +111,16 @@ def main():
     except Exception as e:
         logger.critical(f"Initialization Error: {e}")
         sys.exit(1)
+
+    # 1.5 Run data cleanup to keep Firestore lean
+    if RUN_CLEANUP:
+        try:
+            from data_retention import run_cleanup
+            cleanup_stats = run_cleanup(Config.PROJECT_ID)
+            if cleanup_stats["total_deleted"] > 0:
+                logger.info(f"🧹 Cleaned up {cleanup_stats['total_deleted']} old documents")
+        except Exception as e:
+            logger.warning(f"Data cleanup failed (non-critical): {e}")
 
     # 2. Initialize AI Agent Controller (budget & quota management + vector memory)
     logger.info("Initializing AI Agent Controller with vector memory...")
@@ -126,6 +143,11 @@ def main():
         sys.exit(1)
 
     # 3. Decide what to do (AI-driven decision)
+    if AI_MODE == "scrape":
+        # Direct scrape mode - bypass API for reading replies
+        logger.info("🔍 SCRAPE MODE: Scraping replies via Nitter...")
+        return handle_scrape_mode(api_v1, controller)
+
     if AI_MODE == "auto":
         # AI decides based on quotas and time of day
         mode = controller.should_engage_mode()
@@ -137,7 +159,15 @@ def main():
         mode = "post"  # Default
         logger.info(f"⚠️ Unknown mode '{AI_MODE}', defaulting to POST")
 
-    # 4. Handle REPLY mode
+    # 4. Handle REPLY mode (try scrape-based first if enabled)
+    if mode == "reply" and ENABLE_SCRAPE_REPLIES:
+        logger.info("💬 Trying scrape-based reply mode first...")
+        result = handle_scrape_mode(api_v1, controller)
+        if result == 0:
+            return result
+        logger.info("Scrape mode didn't find replies, falling back to normal flow...")
+
+    # 5. Handle REPLY mode (API-based fallback)
     if mode == "reply" and ENABLE_REPLIES:
         return handle_reply_mode(api_v1, client_v2, controller)
 
@@ -176,6 +206,46 @@ def main():
 
     # 7. Handle POST mode with zero-waste content generation
     return handle_post_mode(api_v1, client_v2, brain, controller, FORCE_VIDEO)
+
+
+def handle_scrape_mode(api_v1, controller):
+    """
+    Handle scrape-based reply mode: Scrape replies via Nitter and respond.
+    Bypasses Twitter API for reading - only uses API for posting.
+
+    Returns:
+        0 if successful (even if no replies found)
+        1 if error occurred
+    """
+    logger.info("🔍 SCRAPE MODE: Checking for replies via Nitter...")
+
+    try:
+        from reply_scraper import scrape_and_respond
+
+        # Get bot username from config or environment
+        bot_username = os.getenv("BOT_USERNAME", "PatriotxSystem")
+
+        # Run the scraper
+        replies_sent = scrape_and_respond(
+            username=bot_username,
+            project_id=Config.PROJECT_ID,
+            twitter_api_v1=api_v1,
+            max_responses=3  # Max 3 replies per scrape cycle
+        )
+
+        if replies_sent > 0:
+            logger.info(f"✅ Scrape mode: Sent {replies_sent} AI-generated replies")
+            # Record replies in controller
+            for _ in range(replies_sent):
+                controller.record_reply_created()
+        else:
+            logger.info("No new replies to respond to")
+
+        return 0
+
+    except Exception as e:
+        logger.error(f"Scrape mode failed: {e}")
+        return 1
 
 
 def handle_reply_mode(api_v1, client_v2, controller):

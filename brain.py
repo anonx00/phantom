@@ -58,6 +58,33 @@ except ImportError:
     MemeFetcher = None
     ContentResearcher = None
 
+# Token-efficient encoding for LLM prompts
+try:
+    from toon_helper import toon, encode_for_llm
+    TOON_AVAILABLE = True
+except ImportError:
+    TOON_AVAILABLE = False
+    def toon(data): return str(data)
+    def encode_for_llm(data, use_toon=True): return str(data)
+
+# AI Context for self-awareness
+try:
+    from data_retention import get_ai_context
+    AI_CONTEXT_AVAILABLE = True
+except ImportError:
+    AI_CONTEXT_AVAILABLE = False
+    def get_ai_context(project_id, include_trends=True): return ""
+
+# Trend scraper for current topics
+try:
+    from trend_scraper import TrendScraper
+    TREND_SCRAPER_AVAILABLE = True
+except ImportError:
+    TREND_SCRAPER_AVAILABLE = False
+    TrendScraper = None
+
+logger = logging.getLogger(__name__)
+
 
 # ============================================================================
 # AI Response Parser - Robust handling of AI-to-AI data flow
@@ -214,10 +241,6 @@ class AIResponseParser:
 
         return caption
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 # PERSONA - AI-driven, adaptive voice
 # Account: @Patriot0xSystem "BIG BOSS" from "Outer Heaven"
 # AI is in full control of this Twitter account - autonomous posting decisions
@@ -369,6 +392,77 @@ class AgentBrain:
                 logger.info("✓ Content researcher initialized for agentic decisions")
             except Exception as e:
                 logger.warning(f"Agentic content system not available: {e}")
+
+        # Initialize trend scraper for real-time trends
+        self.trend_scraper = None
+        if TREND_SCRAPER_AVAILABLE:
+            try:
+                self.trend_scraper = TrendScraper()
+                logger.info("✓ Trend scraper initialized (8 sources: HN, CoinGecko, Reddit, GitHub, etc.)")
+            except Exception as e:
+                logger.warning(f"Trend scraper not available: {e}")
+
+        # Log TOON availability for token efficiency
+        if TOON_AVAILABLE:
+            logger.info("✓ TOON format enabled (~40% token savings)")
+
+        # Log AI context availability
+        if AI_CONTEXT_AVAILABLE:
+            logger.info("✓ AI context manager enabled (self-awareness)")
+
+    def get_current_trends(self, limit: int = 10) -> list:
+        """
+        Get current trends from multiple sources.
+        Uses trend scraper if available, falls back to news fetcher.
+        """
+        trends = []
+
+        if self.trend_scraper:
+            try:
+                all_trends = self.trend_scraper.get_all_trends(limit_per_source=3)
+                trends = all_trends[:limit]
+                logger.info(f"📊 Got {len(trends)} current trends from scraper")
+            except Exception as e:
+                logger.warning(f"Trend scraper failed: {e}")
+
+        # Fallback to news if no trends
+        if not trends and self.news_fetcher:
+            try:
+                stories = self.news_fetcher.get_top_stories(limit=limit)
+                trends = [{"topic": s.get("title", ""), "source": "hackernews"} for s in stories]
+            except Exception:
+                pass
+
+        return trends
+
+    def get_ai_context_prompt(self) -> str:
+        """
+        Get AI context prompt for self-awareness.
+        Includes recent posts, stats, and trends.
+        """
+        if AI_CONTEXT_AVAILABLE:
+            try:
+                return get_ai_context(self.project_id, include_trends=True)
+            except Exception as e:
+                logger.warning(f"Failed to get AI context: {e}")
+
+        # Fallback: minimal context
+        return """=== AI CONTEXT ===
+You are @PatriotxSystem - an autonomous AI running a tech Twitter account.
+You post about AI, crypto, tech industry with cynical wit.
+Make your own decisions. Stay in character.
+"""
+
+    def format_data_for_prompt(self, data: dict) -> str:
+        """
+        Format data for LLM prompt using TOON for token efficiency.
+        Falls back to simple string if TOON not available.
+        """
+        if TOON_AVAILABLE:
+            return toon(data)
+        else:
+            import json
+            return json.dumps(data, indent=2)
 
     def _discover_available_models(self) -> list:
         """
