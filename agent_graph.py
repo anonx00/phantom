@@ -129,10 +129,10 @@ class PhantomAgentGraph:
         # Get memory/past posts for variety
         try:
             memory_data = {"recent_types": [], "last_topics": []}
-            # Try to get recent posts from Firestore
+            # Get recent posts from Firestore (collection: post_history)
             from google.cloud import firestore
             db = firestore.Client(project=self.project_id)
-            posts = db.collection("posts").order_by(
+            posts = db.collection("post_history").order_by(
                 "timestamp", direction=firestore.Query.DESCENDING
             ).limit(5).stream()
             for post in posts:
@@ -144,8 +144,10 @@ class PhantomAgentGraph:
             state["memory"] = memory_data
             if memory_data["recent_types"]:
                 logger.info(f"  Recent types: {memory_data['recent_types'][:3]}")
+            else:
+                logger.info("  No recent post history found")
         except Exception as e:
-            logger.debug(f"Could not get recent posts: {e}")
+            logger.warning(f"Could not get recent posts: {e}")
             state["memory"] = {"recent_types": [], "last_topics": []}
 
         # Get daily stats
