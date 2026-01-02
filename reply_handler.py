@@ -13,6 +13,9 @@ AI decides:
 ZERO WASTE:
 - Only generate reply if AI approves engagement
 - Store interactions for memory/learning
+
+IMPORTANT: This creates REPLIES, not POSTS. They are tracked separately
+via the unified ReplyTracker to prevent confusion and duplicates.
 """
 
 import logging
@@ -24,6 +27,9 @@ from config import Config
 from ai_agent_controller import AIAgentController
 
 logger = logging.getLogger(__name__)
+
+# Log prefix for clarity
+LOG_PREFIX = "[API-REPLY]"
 
 
 class ReplyHandler:
@@ -61,7 +67,12 @@ class ReplyHandler:
 
         # Use vector memory from controller for rich context
         self.vector_memory = controller.vector_memory
-        logger.info("🧠 Reply handler using vector memory for context")
+
+        # Use unified reply tracker for deduplication
+        from reply_tracker import get_reply_tracker
+        self.reply_tracker = get_reply_tracker(Config.PROJECT_ID)
+
+        logger.info(f"{LOG_PREFIX} Reply handler initialized with unified tracking")
 
         # Get bot user ID
         self._bot_user_id = None
@@ -411,7 +422,7 @@ Generate ONLY the reply text, nothing else:"""
 
     def post_reply(self, mention: Dict, reply_text: str) -> bool:
         """
-        Post reply to Twitter.
+        Post REPLY to Twitter (not a post - tracked separately).
 
         Args:
             mention: Mention dict
@@ -420,17 +431,36 @@ Generate ONLY the reply text, nothing else:"""
         Returns:
             Success status
         """
+        tweet_id = mention.get("tweet_id") or mention.get("id")
+
+        # Check if we've already replied (using unified tracker)
+        if self.reply_tracker.has_replied_to(tweet_id, mention["author_username"]):
+            logger.info(f"{LOG_PREFIX} Already replied to @{mention['author_username']}, skipping")
+            return False
+
         try:
+            logger.info(f"{LOG_PREFIX} Sending REPLY to @{mention['author_username']}...")
+
             response = self.client_v2.create_tweet(
                 text=reply_text,
-                in_reply_to_tweet_id=mention["tweet_id"]
+                in_reply_to_tweet_id=tweet_id
             )
 
             if response and response.data:
                 posted_id = response.data['id']
-                logger.info(f"✅ Posted reply {posted_id} to @{mention['author_username']}")
+                logger.info(f"{LOG_PREFIX} REPLY sent: {posted_id} to @{mention['author_username']}")
 
-                # Record the interaction
+                # Record in unified tracker (source of truth)
+                self.reply_tracker.record_reply_sent(
+                    target_tweet_id=tweet_id,
+                    target_author=mention["author_username"],
+                    target_text=mention["text"],
+                    our_reply=reply_text,
+                    our_reply_tweet_id=posted_id,
+                    source="api"
+                )
+
+                # Also store in vector memory for AI context
                 self._store_interaction(mention, reply_text, posted_id)
 
                 # Update controller stats
@@ -439,9 +469,9 @@ Generate ONLY the reply text, nothing else:"""
                 return True
 
         except tweepy.errors.TooManyRequests:
-            logger.error("Rate limited when posting reply")
+            logger.error(f"{LOG_PREFIX} Rate limited when sending reply")
         except Exception as e:
-            logger.error(f"Failed to post reply: {e}")
+            logger.error(f"{LOG_PREFIX} Failed to send reply: {e}")
 
         return False
 

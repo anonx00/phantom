@@ -7,7 +7,6 @@ from config import Config, get_secret
 
 # Lazy imports for cold start optimization - only import heavy modules when needed
 # from brain import AgentBrain  # Moved to after scheduler check
-# from veo_client import VeoClient  # Imported when needed
 
 # Check for operational mode
 FORCE_POST = os.getenv("FORCE_POST", "false").lower() == "true"
@@ -210,14 +209,16 @@ def main():
 
 def handle_scrape_mode(api_v1, controller):
     """
-    Handle scrape-based reply mode: Scrape replies via Nitter and respond.
-    Bypasses Twitter API for reading - only uses API for posting.
+    Handle SCRAPE-REPLY mode: Scrape replies via Nitter and respond.
+
+    IMPORTANT: This sends REPLIES to users who commented on our posts.
+    These are NOT original posts - they are tracked separately.
 
     Returns:
         0 if successful (even if no replies found)
         1 if error occurred
     """
-    logger.info("🔍 SCRAPE MODE: Checking for replies via Nitter...")
+    logger.info("[SCRAPE-REPLY] Checking for comments to reply to...")
 
     try:
         from reply_scraper import scrape_and_respond
@@ -225,7 +226,7 @@ def handle_scrape_mode(api_v1, controller):
         # Get bot username from config or environment
         bot_username = os.getenv("BOT_USERNAME", "PatriotxSystem")
 
-        # Run the scraper
+        # Run the scraper (replies are tracked in unified ReplyTracker)
         replies_sent = scrape_and_respond(
             username=bot_username,
             project_id=Config.PROJECT_ID,
@@ -234,36 +235,39 @@ def handle_scrape_mode(api_v1, controller):
         )
 
         if replies_sent > 0:
-            logger.info(f"✅ Scrape mode: Sent {replies_sent} AI-generated replies")
-            # Record replies in controller
-            for _ in range(replies_sent):
-                controller.record_reply_created()
+            logger.info(f"[SCRAPE-REPLY] Sent {replies_sent} REPLIES (not posts)")
+            # Note: replies are already recorded in scrape_and_respond
+            # We don't need to call controller.record_reply_created() here
+            # as it's handled in the unified tracker
         else:
-            logger.info("No new replies to respond to")
+            logger.info("[SCRAPE-REPLY] No new comments to reply to")
 
         return 0
 
     except Exception as e:
-        logger.error(f"Scrape mode failed: {e}")
+        logger.error(f"[SCRAPE-REPLY] Failed: {e}")
         return 1
 
 
 def handle_reply_mode(api_v1, client_v2, controller):
     """
-    Handle reply mode: Check mentions and reply to worthy ones.
+    Handle API-REPLY mode: Check mentions via API and reply to worthy ones.
+
+    IMPORTANT: This sends REPLIES to users who mentioned us.
+    These are NOT original posts - they are tracked separately.
     Falls back to POST mode if mentions API is unavailable (FREE tier limitation).
 
     Returns:
         Exit code
     """
-    logger.info("💬 REPLY MODE: Checking mentions...")
+    logger.info("[API-REPLY] Checking for mentions to reply to...")
 
     try:
         # Initialize Brain for AI responses (lightweight - no video models)
         from brain import AgentBrain
         brain = AgentBrain()
 
-        # Initialize reply handler
+        # Initialize reply handler (uses unified ReplyTracker)
         from reply_handler import ReplyHandler
         reply_handler = ReplyHandler(
             api_v1=api_v1,
@@ -277,12 +281,12 @@ def handle_reply_mode(api_v1, client_v2, controller):
         replies_sent = reply_handler.process_mentions_and_reply()
 
         if replies_sent > 0:
-            logger.info(f"✅ Sent {replies_sent} replies")
+            logger.info(f"[API-REPLY] Sent {replies_sent} REPLIES (not posts)")
         elif replies_sent == 0:
-            logger.info("No replies sent (no worthy mentions or quota exhausted)")
+            logger.info("[API-REPLY] No mentions worth replying to")
         elif replies_sent == -1:
             # API access issue - fall back to post mode
-            logger.warning("⚠️ Mentions API not available on FREE tier, falling back to POST mode")
+            logger.warning("[API-REPLY] Mentions API blocked (FREE tier), falling back to POST mode")
             can_post, _ = controller.can_create_post()
             if can_post:
                 return handle_post_mode(api_v1, client_v2, brain, controller, force_video=False)
@@ -293,8 +297,8 @@ def handle_reply_mode(api_v1, client_v2, controller):
         error_msg = str(e).lower()
         # Check if this is an API access issue
         if '403' in error_msg or '401' in error_msg or 'forbidden' in error_msg or 'unauthorized' in error_msg:
-            logger.warning(f"⚠️ Reply mode unavailable (API access): {e}")
-            logger.info("Falling back to POST mode...")
+            logger.warning(f"[API-REPLY] API access blocked: {e}")
+            logger.info("[API-REPLY] Falling back to POST mode...")
             try:
                 from brain import AgentBrain
                 brain = AgentBrain()
@@ -302,21 +306,23 @@ def handle_reply_mode(api_v1, client_v2, controller):
                 if can_post:
                     return handle_post_mode(api_v1, client_v2, brain, controller, force_video=False)
             except Exception as fallback_err:
-                logger.error(f"Fallback to POST mode also failed: {fallback_err}")
+                logger.error(f"[POST] Fallback also failed: {fallback_err}")
         else:
-            logger.error(f"Reply mode failed: {e}")
+            logger.error(f"[API-REPLY] Failed: {e}")
         return 1
 
 
 def handle_post_mode(api_v1, client_v2, brain, controller, force_video=False):
     """
-    Handle post mode: Create and post content (original functionality).
-    Now with zero-waste optimization.
+    Handle POST mode: Create and post ORIGINAL content (not replies).
+
+    IMPORTANT: This creates POSTS, not replies to other users.
+    Posts are tracked separately from replies in Firestore.
 
     Returns:
         Exit code
     """
-    logger.info("📝 POST MODE: Creating content...")
+    logger.info("[POST] Creating original content (not a reply)...")
 
     # 3. Get Strategy (may return None if no quality content available)
     try:

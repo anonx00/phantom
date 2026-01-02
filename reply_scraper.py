@@ -7,9 +7,11 @@ No API limits, no authentication required.
 Workflow:
 1. Scrape our profile for recent tweets
 2. For each tweet, scrape the replies
-3. Store new replies in Firestore
+3. Use unified ReplyTracker to check/record replies
 4. AI decides which to respond to
-5. Post replies via Twitter API (media endpoint works on FREE tier)
+5. Post replies via Twitter API (clearly marked as REPLY not POST)
+
+IMPORTANT: This creates REPLIES, not POSTS. Replies are tracked separately.
 """
 
 import logging
@@ -22,6 +24,9 @@ from bs4 import BeautifulSoup
 from google.cloud import firestore
 
 logger = logging.getLogger(__name__)
+
+# Log prefix for clarity
+LOG_PREFIX = "[SCRAPE-REPLY]"
 
 # Working Nitter instances (as of 2024-2025)
 # These change frequently - we try multiple
@@ -47,9 +52,16 @@ class ReplyScraper:
         self.project_id = project_id
         self.db = firestore.Client(project=project_id)
         self.replies_collection = self.db.collection("scraped_replies")
+
+        # Use unified reply tracker
+        from reply_tracker import get_reply_tracker
+        self.reply_tracker = get_reply_tracker(project_id)
+
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
         })
         self.working_instance = None
 
@@ -368,6 +380,8 @@ def scrape_and_respond(username: str, project_id: str, twitter_api_v1, max_respo
     """
     Main entry point: Scrape replies and respond.
 
+    IMPORTANT: This sends REPLIES, not POSTS. They are tracked separately.
+
     Args:
         username: Our Twitter username
         project_id: GCP project ID
@@ -377,55 +391,115 @@ def scrape_and_respond(username: str, project_id: str, twitter_api_v1, max_respo
     Returns:
         Number of replies sent
     """
-    logger.info("🔍 Starting reply scrape cycle...")
+    logger.info(f"{LOG_PREFIX} Starting reply scrape cycle...")
 
     # Initialize components
     scraper = ReplyScraper(username, project_id)
     decider = AIReplyDecider(project_id)
 
+    # Get unified reply tracker
+    from reply_tracker import get_reply_tracker
+    reply_tracker = get_reply_tracker(project_id)
+
     # Scrape for new replies
     new_replies = scraper.scrape_new_replies(max_tweets=10)
 
     if not new_replies:
-        logger.info("No new replies found")
+        logger.info(f"{LOG_PREFIX} No new replies found")
         return 0
 
-    # AI decides which to respond to
-    to_respond = decider.evaluate_replies(new_replies, max_responses=max_responses)
-
-    # Mark skipped replies
-    responded_ids = {r["reply_id"] for r in to_respond}
+    # Filter out replies we've already responded to (using unified tracker)
+    filtered_replies = []
     for reply in new_replies:
+        target_id = reply.get("reply_tweet_id") or reply.get("tweet_id", "")
+        if reply_tracker.has_replied_to(target_id, reply["author"]):
+            logger.debug(f"{LOG_PREFIX} Already replied to @{reply['author']}, skipping")
+            continue
+        if reply_tracker.has_seen_mention(reply["author"], reply["text"], target_id):
+            logger.debug(f"{LOG_PREFIX} Already seen this mention, skipping")
+            continue
+        filtered_replies.append(reply)
+
+    if not filtered_replies:
+        logger.info(f"{LOG_PREFIX} All replies already processed")
+        return 0
+
+    logger.info(f"{LOG_PREFIX} {len(filtered_replies)} new replies to evaluate")
+
+    # AI decides which to respond to
+    to_respond = decider.evaluate_replies(filtered_replies, max_responses=max_responses)
+
+    # Mark skipped replies in unified tracker
+    responded_ids = {r["reply_id"] for r in to_respond}
+    for reply in filtered_replies:
         if reply["reply_id"] not in responded_ids:
+            target_id = reply.get("reply_tweet_id") or reply.get("tweet_id", "")
+            reply_tracker.record_mention_seen(
+                author=reply["author"],
+                text=reply["text"],
+                tweet_id=target_id,
+                responded=False,
+                skip_reason="AI decided not to engage"
+            )
             scraper.mark_skipped(reply["reply_id"], reply)
 
     # Post responses
     responses_sent = 0
     for reply in to_respond:
         try:
-            # Post reply using v1 API
+            # Build reply text
             response_text = f"@{reply['author']} {reply['ai_response']}"
 
-            # Reply to their tweet
+            # Truncate if needed (280 char limit)
+            if len(response_text) > 280:
+                max_response = 280 - len(f"@{reply['author']} ") - 3
+                response_text = f"@{reply['author']} {reply['ai_response'][:max_response]}..."
+
+            target_id = reply.get("reply_tweet_id") or reply.get("tweet_id", "")
+
+            # Post REPLY (not post) using v1 API
+            logger.info(f"{LOG_PREFIX} Sending REPLY to @{reply['author']}...")
+
             if reply.get("reply_tweet_id"):
-                twitter_api_v1.update_status(
+                result = twitter_api_v1.update_status(
                     status=response_text,
                     in_reply_to_status_id=reply["reply_tweet_id"],
                     auto_populate_reply_metadata=True
                 )
+                our_reply_id = str(result.id) if result else None
             else:
-                # Fallback: just post mentioning them
-                twitter_api_v1.update_status(status=response_text)
+                # Fallback: post mentioning them (still a reply, just orphaned)
+                result = twitter_api_v1.update_status(status=response_text)
+                our_reply_id = str(result.id) if result else None
 
-            # Mark as responded
+            # Record in unified tracker (this is the source of truth)
+            reply_tracker.record_reply_sent(
+                target_tweet_id=target_id,
+                target_author=reply["author"],
+                target_text=reply["text"],
+                our_reply=reply["ai_response"],
+                our_reply_tweet_id=our_reply_id,
+                source="scraper"
+            )
+
+            # Also mark in scraper's own collection (for backward compatibility)
             scraper.mark_replied(reply["reply_id"], reply, reply["ai_response"])
+
             responses_sent += 1
-            logger.info(f"📤 Replied to @{reply['author']}: {reply['ai_response'][:50]}...")
+            logger.info(f"{LOG_PREFIX} REPLY sent to @{reply['author']}: {reply['ai_response'][:50]}...")
 
         except Exception as e:
-            logger.error(f"Failed to post reply to @{reply['author']}: {e}")
-            # Still mark as seen to avoid retry loops
+            logger.error(f"{LOG_PREFIX} Failed to send REPLY to @{reply['author']}: {e}")
+            # Mark as seen to avoid retry loops
+            target_id = reply.get("reply_tweet_id") or reply.get("tweet_id", "")
+            reply_tracker.record_mention_seen(
+                author=reply["author"],
+                text=reply["text"],
+                tweet_id=target_id,
+                responded=False,
+                skip_reason=f"Error: {str(e)[:100]}"
+            )
             scraper.mark_skipped(reply["reply_id"], reply)
 
-    logger.info(f"✅ Reply cycle complete: {responses_sent} replies sent")
+    logger.info(f"{LOG_PREFIX} Reply cycle complete: {responses_sent} REPLIES sent (not posts)")
     return responses_sent
