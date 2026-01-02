@@ -13,11 +13,13 @@ FORCE_POST = os.getenv("FORCE_POST", "false").lower() == "true"
 # Force video generation (bypasses format selection, useful for manual testing)
 FORCE_VIDEO = os.getenv("FORCE_VIDEO", "false").lower() == "true"
 # AI Mode: "post", "reply", "scrape", or "auto" (AI decides)
-AI_MODE = os.getenv("AI_MODE", "auto").lower()
-# Enable reply functionality
+# NOTE: "scrape" mode no longer works - Twitter requires login for all content
+AI_MODE = os.getenv("AI_MODE", "post").lower()  # Default to POST (most reliable)
+# Enable reply functionality (API-based, works on FREE tier with limitations)
 ENABLE_REPLIES = os.getenv("ENABLE_REPLIES", "true").lower() == "true"
-# Enable scrape-based replies (bypasses Twitter API for reading)
-ENABLE_SCRAPE_REPLIES = os.getenv("ENABLE_SCRAPE_REPLIES", "true").lower() == "true"
+# Enable scrape-based replies - DEPRECATED: Nitter no longer works
+# Twitter requires authentication to view any content as of late 2024
+ENABLE_SCRAPE_REPLIES = os.getenv("ENABLE_SCRAPE_REPLIES", "false").lower() == "true"
 # Use LangGraph agent for smarter decisions
 USE_LANGGRAPH = os.getenv("USE_LANGGRAPH", "false").lower() == "true"
 # Run data cleanup on startup (keeps Firestore lean)
@@ -98,10 +100,19 @@ def get_twitter_api():
 
 
 def main():
-    logger.info("🤖 Starting AI Agent (BIG BOSS)...")
-    logger.info(f"Mode: {AI_MODE} | Replies: {'enabled' if ENABLE_REPLIES else 'disabled'} | Scrape: {'enabled' if ENABLE_SCRAPE_REPLIES else 'disabled'}")
-    logger.info(f"LangGraph: {'enabled' if USE_LANGGRAPH else 'disabled'} | Cleanup: {'enabled' if RUN_CLEANUP else 'disabled'}")
-    logger.info("Video source: CivitAI (FREE)")
+    logger.info("=" * 60)
+    logger.info("Starting AI Agent (BIG BOSS)")
+    logger.info("=" * 60)
+    logger.info(f"Mode: {AI_MODE.upper()}")
+    logger.info(f"Video source: CivitAI (FREE)")
+    logger.info(f"API-based replies: {'enabled' if ENABLE_REPLIES else 'disabled'}")
+
+    if ENABLE_SCRAPE_REPLIES:
+        logger.warning("Scrape mode enabled but DEPRECATED - Twitter requires login now")
+    else:
+        logger.info("Scrape mode: disabled (Twitter requires login)")
+
+    logger.info("-" * 60)
 
     # 1. Validate Environment & Secrets
     try:

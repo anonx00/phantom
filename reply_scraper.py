@@ -1,17 +1,16 @@
 """
-Reply Scraper - Scrape replies without Twitter API
+Reply Scraper - DEPRECATED: Nitter no longer works reliably
 
-Uses Nitter (open-source Twitter frontend) to scrape replies to our tweets.
-No API limits, no authentication required.
+Twitter/X now requires authentication to view any content.
+Nitter instances are blocked or return empty results.
 
-Workflow:
-1. Scrape our profile for recent tweets
-2. For each tweet, scrape the replies
-3. Use unified ReplyTracker to check/record replies
-4. AI decides which to respond to
-5. Post replies via Twitter API (clearly marked as REPLY not POST)
+This module is kept for backward compatibility but will:
+1. Try Nitter (usually fails)
+2. Fall back gracefully with a clear log message
+3. Return 0 replies without crashing
 
-IMPORTANT: This creates REPLIES, not POSTS. Replies are tracked separately.
+For replies, use reply_handler.py with the official Twitter API instead.
+Or upgrade to Basic tier ($100/mo) for proper mention access.
 """
 
 import logging
@@ -28,15 +27,20 @@ logger = logging.getLogger(__name__)
 # Log prefix for clarity
 LOG_PREFIX = "[SCRAPE-REPLY]"
 
-# Working Nitter instances (as of 2024-2025)
-# These change frequently - we try multiple
+# Nitter instances - most are blocked or dead now
+# Twitter requires auth for all content as of late 2024
 NITTER_INSTANCES = [
     "https://nitter.poast.org",
     "https://nitter.privacydev.net",
     "https://nitter.1d4.us",
     "https://nitter.kavin.rocks",
     "https://nitter.unixfox.eu",
+    "https://nitter.net",
+    "https://nitter.cz",
 ]
+
+# Flag to track if we've already warned about Nitter being dead
+_NITTER_WARNING_SHOWN = False
 
 
 class ReplyScraper:
@@ -66,22 +70,53 @@ class ReplyScraper:
         self.working_instance = None
 
     def _find_working_nitter(self) -> Optional[str]:
-        """Find a working Nitter instance."""
+        """
+        Find a working Nitter instance.
+
+        NOTE: As of late 2024, Twitter requires auth for all content.
+        Most Nitter instances are blocked or return empty/login pages.
+        This method will usually return None now.
+        """
+        global _NITTER_WARNING_SHOWN
+
         if self.working_instance:
             return self.working_instance
 
         for instance in NITTER_INSTANCES:
             try:
                 resp = self.session.get(f"{instance}/{self.username}", timeout=10)
-                if resp.status_code == 200 and 'timeline' in resp.text.lower():
-                    logger.info(f"✅ Found working Nitter: {instance}")
-                    self.working_instance = instance
-                    return instance
+
+                # Check for actual content, not just 200 status
+                if resp.status_code == 200:
+                    text_lower = resp.text.lower()
+
+                    # Check for signs that we got actual content
+                    has_timeline = 'timeline' in text_lower
+                    has_tweets = 'tweet-content' in text_lower or 'tweet-body' in text_lower
+                    has_login_wall = 'sign up' in text_lower and "hasn't posted" in text_lower
+
+                    if has_login_wall:
+                        logger.debug(f"Nitter {instance} shows login wall")
+                        continue
+
+                    if has_timeline and has_tweets:
+                        logger.info(f"{LOG_PREFIX} Found working Nitter: {instance}")
+                        self.working_instance = instance
+                        return instance
+
+            except requests.exceptions.Timeout:
+                logger.debug(f"Nitter {instance} timed out")
             except Exception as e:
                 logger.debug(f"Nitter {instance} failed: {e}")
                 continue
 
-        logger.warning("❌ No working Nitter instances found")
+        # Only show this warning once per session
+        if not _NITTER_WARNING_SHOWN:
+            logger.warning(f"{LOG_PREFIX} No working Nitter instances found.")
+            logger.warning(f"{LOG_PREFIX} Twitter now requires login to view content.")
+            logger.warning(f"{LOG_PREFIX} Scraper mode will not work - use POST mode instead.")
+            _NITTER_WARNING_SHOWN = True
+
         return None
 
     def _get_reply_id(self, reply: Dict) -> str:
