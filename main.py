@@ -7,7 +7,6 @@ from config import Config, get_secret
 
 # Lazy imports for cold start optimization - only import heavy modules when needed
 # from brain import AgentBrain  # Moved to after scheduler check
-# from veo_client import VeoClient  # Imported when needed
 
 # Check for operational mode
 FORCE_POST = os.getenv("FORCE_POST", "false").lower() == "true"
