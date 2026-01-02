@@ -11,5 +11,6 @@ feedparser==6.0.11
 pytz==2024.1
 newspaper3k>=0.2.8
 beautifulsoup4>=4.12.0
-# Note: toon_helper.py uses JSON fallback (toon-format is JS-only)
-# Note: langgraph/agent_graph.py removed - not needed for POST mode
+# LangGraph for agentic AI workflow
+langgraph>=1.0.0
+# Note: toon_helper.py has custom TOON implementation (saves ~25% tokens)

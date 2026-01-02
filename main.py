@@ -1,7 +1,12 @@
 """
-Phantom AI Agent - POST Mode Only
+Phantom AI Agent - Agentic POST Mode
 
-Simple, reliable posting of AI-generated content to Twitter/X.
+AI-powered posting with LangGraph workflow:
+- Gathers trends/context automatically
+- AI decides content type based on trends
+- Quality checks before posting
+- TOON format for efficient token usage
+
 Video source: CivitAI (FREE)
 """
 
@@ -16,6 +21,7 @@ from config import Config, get_secret
 FORCE_POST = os.getenv("FORCE_POST", "false").lower() == "true"
 FORCE_VIDEO = os.getenv("FORCE_VIDEO", "false").lower() == "true"
 RUN_CLEANUP = os.getenv("RUN_CLEANUP", "true").lower() == "true"
+USE_LANGGRAPH = os.getenv("USE_LANGGRAPH", "true").lower() == "true"
 
 # Logging
 logging.basicConfig(
@@ -141,12 +147,28 @@ def main():
         logger.critical(f"Brain init failed: {e}")
         sys.exit(1)
 
-    # 7. Get content strategy
+    # 7. Get content strategy (using LangGraph agent or direct)
     try:
-        strategy = brain.get_strategy(force_video=FORCE_VIDEO)
-        if strategy is None:
-            logger.info("No quality content available - skipping")
-            sys.exit(0)
+        if USE_LANGGRAPH:
+            logger.info("Running LangGraph agent workflow...")
+            from agent_graph import run_agent
+            result = run_agent(
+                brain=brain,
+                controller=controller,
+                project_id=Config.PROJECT_ID,
+                force_video=FORCE_VIDEO
+            )
+            if not result["success"] or not result["strategy"]:
+                logger.info(f"Agent workflow: {result.get('error', 'No content')}")
+                sys.exit(0)
+            strategy = result["strategy"]
+            logger.info(f"Agent decided: {result['content_type']} on '{result.get('topic', 'N/A')}'")
+        else:
+            # Direct brain call (fallback)
+            strategy = brain.get_strategy(force_video=FORCE_VIDEO)
+            if strategy is None:
+                logger.info("No quality content available - skipping")
+                sys.exit(0)
         logger.info(f"Strategy: {strategy['type']}")
     except Exception as e:
         logger.error(f"Strategy failed: {e}")
