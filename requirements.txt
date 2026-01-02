@@ -11,5 +11,5 @@ feedparser==6.0.11
 pytz==2024.1
 newspaper3k>=0.2.8
 beautifulsoup4>=4.12.0
-toon-format>=2.0.0
-langgraph>=0.2.0
+# toon-format removed - toon_helper.py has JSON fallback
+# langgraph removed - agent_graph.py has simple fallback
