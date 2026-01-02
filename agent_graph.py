@@ -27,6 +27,8 @@ try:
     logger.info("LangGraph available - agentic workflow enabled")
 except ImportError:
     LANGGRAPH_AVAILABLE = False
+    StateGraph = Any  # For type hints when not installed
+    END = None
     logger.warning("langgraph not installed, using simple workflow")
 
 
@@ -124,14 +126,27 @@ class PhantomAgentGraph:
             logger.warning(f"Failed to get trends: {e}")
             state["trends"] = []
 
-        # Get memory/past posts
+        # Get memory/past posts for variety
         try:
-            from toon_helper import encode_memory_for_prompt
-            # Get recent post types to ensure variety
-            memory_stats = self.controller.vector_memory.get_interaction_stats()
-            state["memory"] = memory_stats
+            memory_data = {"recent_types": [], "last_topics": []}
+            # Try to get recent posts from Firestore
+            from google.cloud import firestore
+            db = firestore.Client(project=self.project_id)
+            posts = db.collection("posts").order_by(
+                "timestamp", direction=firestore.Query.DESCENDING
+            ).limit(5).stream()
+            for post in posts:
+                data = post.to_dict()
+                if data.get("type"):
+                    memory_data["recent_types"].append(data["type"])
+                if data.get("topic"):
+                    memory_data["last_topics"].append(data["topic"])
+            state["memory"] = memory_data
+            if memory_data["recent_types"]:
+                logger.info(f"  Recent types: {memory_data['recent_types'][:3]}")
         except Exception as e:
-            state["memory"] = {}
+            logger.debug(f"Could not get recent posts: {e}")
+            state["memory"] = {"recent_types": [], "last_topics": []}
 
         # Get daily stats
         state["daily_stats"] = self.controller.get_daily_summary()
@@ -143,8 +158,8 @@ class PhantomAgentGraph:
         """AI decides what content type to create based on context."""
         logger.info("AI deciding content type...")
 
-        # Use TOON for efficient context encoding
         from toon_helper import toon
+        from datetime import datetime
 
         # Check if we can post
         can_post, reason = self.controller.can_create_post()
@@ -162,35 +177,94 @@ class PhantomAgentGraph:
             logger.info(f"  Forced video on topic: {state['topic']}")
             return state
 
-        # AI decides based on trends and variety
-        context = toon({
-            "trends": state["trends"][:5],
-            "daily_stats": state["daily_stats"],
-            "recent_types": state.get("memory", {}).get("recent_types", [])
-        })
+        # Get context for smart decision
+        recent_types = state.get("memory", {}).get("recent_types", [])
+        last_topics = state.get("memory", {}).get("last_topics", [])
+        hour = datetime.now().hour
 
-        # Simple heuristic for now - could be AI-powered
-        if state["trends"]:
-            top_trend = state["trends"][0]
-            category = top_trend.get("category", "general")
+        # Smart content type selection with variety
+        content_type = self._smart_content_pick(
+            trends=state["trends"],
+            recent_types=recent_types,
+            hour=hour
+        )
 
-            # Pick content type based on trend category
-            if category in ["crypto", "tech", "ai"]:
-                state["content_type"] = "video"
-            elif category in ["meme", "viral"]:
-                state["content_type"] = "meme"
-            else:
-                state["content_type"] = "text"
+        # Pick topic avoiding recent ones
+        topic = self._smart_topic_pick(
+            trends=state["trends"],
+            last_topics=last_topics,
+            content_type=content_type
+        )
 
-            state["topic"] = top_trend.get("topic", top_trend.get("name", ""))
-        else:
-            # No trends - generate a thought
-            state["content_type"] = "thought"
-            state["topic"] = None
-
+        state["content_type"] = content_type
+        state["topic"] = topic
         state["action"] = "post"
-        logger.info(f"  Decision: {state['content_type']} on '{state.get('topic', 'N/A')}'")
+
+        # Log context for debugging
+        logger.info(f"  Context: hour={hour}, recent={recent_types[:2]}")
+        logger.info(f"  Decision: {content_type} on '{topic or 'N/A'}'")
         return state
+
+    def _smart_content_pick(self, trends: List[Dict], recent_types: List[str], hour: int) -> str:
+        """Pick content type based on trends, variety, and time."""
+        # Avoid repeating last content type
+        last_type = recent_types[0] if recent_types else None
+
+        # Content type candidates based on trends
+        candidates = []
+        if trends:
+            top_category = trends[0].get("category", "general")
+            if top_category in ["crypto", "tech", "ai"]:
+                candidates = ["video", "text", "thought"]
+            elif top_category in ["meme", "viral"]:
+                candidates = ["meme", "text", "video"]
+            else:
+                candidates = ["text", "video", "thought"]
+        else:
+            candidates = ["thought", "text"]
+
+        # Time-based adjustments (engagement patterns)
+        # Peak hours (9-11am, 7-9pm) = video/visual content
+        # Off-peak = text/thoughts
+        if hour in [9, 10, 11, 19, 20, 21]:
+            # Boost video during peak
+            if "video" in candidates:
+                candidates.remove("video")
+                candidates.insert(0, "video")
+        elif hour in [0, 1, 2, 3, 4, 5]:
+            # Late night = thoughts
+            if "thought" in candidates:
+                candidates.remove("thought")
+                candidates.insert(0, "thought")
+
+        # Variety: skip last type if possible
+        if last_type in candidates and len(candidates) > 1:
+            candidates.remove(last_type)
+
+        return candidates[0] if candidates else "text"
+
+    def _smart_topic_pick(self, trends: List[Dict], last_topics: List[str], content_type: str) -> Optional[str]:
+        """Pick topic avoiding recent ones."""
+        if not trends:
+            return None
+
+        # Filter out recently used topics
+        available = [t for t in trends if t.get("topic", t.get("name", "")) not in last_topics]
+
+        # If all filtered, use all trends
+        if not available:
+            available = trends
+
+        # For video, prefer tech/crypto/ai categories
+        if content_type == "video":
+            tech_trends = [t for t in available if t.get("category") in ["crypto", "tech", "ai"]]
+            if tech_trends:
+                available = tech_trends
+
+        # Return first available
+        if available:
+            return available[0].get("topic", available[0].get("name", ""))
+        return None
 
     def _pick_topic_for_video(self, trends: List[Dict]) -> str:
         """Pick best topic for video content."""
