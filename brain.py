@@ -928,6 +928,113 @@ Write the caption:"""
                 return f"{base}\n\n{source_url}"
             return base
 
+    def generate_video_caption(self, video_metadata: dict) -> str:
+        """
+        Generate a caption for a CivitAI video based on its actual metadata.
+
+        This ensures captions match the actual video content instead of
+        being generic AI-themed text.
+
+        Args:
+            video_metadata: Dict with 'meta', 'stats', 'username', 'category'
+                meta can contain: prompt, model, sampler, etc.
+
+        Returns:
+            Caption string (max 280 chars)
+        """
+        try:
+            meta = video_metadata.get('meta', {})
+            stats = video_metadata.get('stats', {})
+            username = video_metadata.get('username', 'unknown')
+            category = video_metadata.get('category', 'general')
+
+            # Extract what we know about the video from CivitAI metadata
+            # 'meta' often contains the generation prompt
+            original_prompt = meta.get('prompt', '')
+            model_name = meta.get('Model', meta.get('model', ''))
+            sampler = meta.get('sampler', '')
+
+            # Build context about what's actually in the video
+            video_context_parts = []
+
+            if original_prompt:
+                # Truncate if too long (CivitAI prompts can be very detailed)
+                clean_prompt = original_prompt[:300].replace('\n', ' ').strip()
+                video_context_parts.append(f"Visual content: {clean_prompt}")
+
+            if model_name:
+                video_context_parts.append(f"AI model: {model_name}")
+
+            if category and category != 'general':
+                video_context_parts.append(f"Category: {category}")
+
+            if username and username != 'unknown':
+                video_context_parts.append(f"Creator: {username}")
+
+            likes = stats.get('likeCount', 0) + stats.get('heartCount', 0) * 2
+            if likes > 100:
+                video_context_parts.append(f"Popular video ({likes} likes)")
+
+            video_context = "\n".join(video_context_parts) if video_context_parts else "AI-generated art video"
+
+            caption_prompt = f"""Write a caption for this AI-generated video post on Twitter.
+
+VIDEO DETAILS:
+{video_context}
+
+PERSONA: You're BIG BOSS - a cynical tech veteran. Dry wit, no hype.
+
+Requirements:
+- 60-200 characters max
+- Caption must relate to what's ACTUALLY in this video
+- Dry humor or genuine observation about the visual
+- No hashtags, no emojis
+- Sound like someone sharing interesting AI art, not marketing
+- If the video shows nature, comment on nature. If it's anime, comment on anime. Match the content.
+
+Good examples (adapt style to video content):
+- "Someone trained an AI on 90s anime and I'm not complaining."
+- "Cyberpunk street vibes. The neon reflections are actually impressive."
+- "Nature rendered at 4K. The AI got the water physics right for once."
+- "Abstract fever dream. My GPU made this and now I have questions."
+
+Bad examples (too generic, doesn't match content):
+- "AI art is the future" (generic)
+- "The algorithm strikes again" (doesn't describe the video)
+- "Another day, another generation" (vague)
+
+Write ONE caption that matches this specific video:"""
+
+            raw_caption = self._generate_with_fallback(caption_prompt)
+            caption = self._clean_tweet_response(raw_caption)
+            caption = caption.strip().strip('"').strip("'")
+
+            # Validate and truncate
+            if len(caption) > 280:
+                caption = caption[:277] + "..."
+
+            if len(caption) < 20:
+                # Fallback based on category
+                fallbacks = {
+                    'anime': "AI doing that anime thing. Results vary.",
+                    'space': "Cosmic render. The void looks good today.",
+                    'nature': "AI's take on nature. Not bad.",
+                    'abstract': "Abstract generation. Make of it what you will.",
+                    'fantasy': "Fantasy render dropped.",
+                    'cinematic': "Cinematic AI. The lighting knows what it's doing.",
+                    'tech': "Cyberpunk aesthetic. Neon included.",
+                    'art': "AI art. This one turned out decent.",
+                }
+                caption = fallbacks.get(category, "AI-generated. The machine is learning.")
+
+            logger.info(f"Generated video caption from metadata: {caption}")
+            return caption
+
+        except Exception as e:
+            logger.warning(f"Video caption generation failed: {e}")
+            # Fallback caption
+            return "AI art. The algorithm continues."
+
     def _clean_tweet_response(self, response: str) -> str:
         """
         Cleans AI response to extract just the tweet content.

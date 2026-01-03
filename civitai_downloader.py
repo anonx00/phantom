@@ -326,18 +326,19 @@ class CivitAIVideoDownloader:
         self,
         category: str = 'general',
         prefer_trending: bool = True
-    ) -> Optional[str]:
+    ) -> Optional[Dict]:
         """
         Get a random video and download it.
 
-        This is the main interface - matches VeoClient.generate_video() signature.
+        This is the main interface - returns both path AND metadata for caption generation.
 
         Args:
             category: Category to filter by
             prefer_trending: If True, prefer trending videos
 
         Returns:
-            Path to downloaded video file, or None on failure
+            Dict with 'path' and 'metadata', or None on failure
+            metadata includes: id, stats, meta, username, category
         """
         videos = []
 
@@ -366,12 +367,24 @@ class CivitAIVideoDownloader:
                 logger.info(f"Selected video - Likes: {stats.get('likeCount', 0)}, "
                            f"Hearts: {stats.get('heartCount', 0)}, "
                            f"Creator: {video.get('username', 'unknown')}")
-                return video_path
+
+                # Return both path AND metadata for caption generation
+                return {
+                    'path': video_path,
+                    'metadata': {
+                        'id': video.get('id'),
+                        'stats': stats,
+                        'meta': video.get('meta', {}),
+                        'username': video.get('username', 'unknown'),
+                        'category': category,
+                        'url': video_url,
+                    }
+                }
 
         logger.error("Failed to download any video from CivitAI")
         return None
 
-    def get_video_for_prompt(self, prompt: str) -> Optional[str]:
+    def get_video_for_prompt(self, prompt: str) -> Optional[Dict]:
         """
         Get a video that somewhat matches a prompt.
 
@@ -382,7 +395,7 @@ class CivitAIVideoDownloader:
             prompt: The video prompt (used to guess category)
 
         Returns:
-            Path to downloaded video file
+            Dict with 'path' and 'metadata', or None on failure
         """
         prompt_lower = prompt.lower()
 
@@ -410,7 +423,7 @@ class CivitAIVideoDownloader:
 
 
 # Convenience function matching VeoClient interface
-def download_civitai_video(prompt: str = "") -> Optional[str]:
+def download_civitai_video(prompt: str = "") -> Optional[Dict]:
     """
     Download a video from CivitAI.
 
@@ -420,7 +433,7 @@ def download_civitai_video(prompt: str = "") -> Optional[str]:
         prompt: Optional prompt to guide category selection
 
     Returns:
-        Path to downloaded video file
+        Dict with 'path' and 'metadata', or None on failure
     """
     downloader = CivitAIVideoDownloader()
 

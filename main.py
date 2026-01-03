@@ -210,14 +210,24 @@ def post_video(api_v1, client_v2, brain, controller, strategy):
     try:
         from civitai_downloader import CivitAIVideoDownloader
         downloader = CivitAIVideoDownloader()
-        video_path = downloader.get_video_for_prompt(strategy.get("video_prompt", ""))
+        video_result = downloader.get_video_for_prompt(strategy.get("video_prompt", ""))
 
-        if not video_path or not os.path.exists(video_path):
+        if not video_result:
             raise RuntimeError("CivitAI download failed")
 
-        content = strategy.get("content", "")
+        video_path = video_result.get('path')
+        video_metadata = video_result.get('metadata', {})
+
+        if not video_path or not os.path.exists(video_path):
+            raise RuntimeError("CivitAI download failed - no video path")
+
+        # Generate caption based on ACTUAL video metadata, not generic prompt
+        content = brain.generate_video_caption(video_metadata)
         if not content:
-            raise ValueError("Missing content in strategy")
+            # Fallback to strategy content if caption generation fails
+            content = strategy.get("content", "")
+        if not content:
+            raise ValueError("Missing content for video post")
 
         media = upload_media_v1(api_v1, video_path, chunked=True, media_category="tweet_video")
         if not media or not hasattr(media, 'media_id'):
@@ -226,6 +236,7 @@ def post_video(api_v1, client_v2, brain, controller, strategy):
         response = post_tweet_v2(client_v2, text=content, media_ids=[media.media_id])
 
         logger.info(f"Video posted: {response.data['id']}")
+        strategy['content'] = content  # Update for logging
         brain.log_post(strategy, success=True)
         controller.record_post_created("video")
 
