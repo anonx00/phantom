@@ -14,3 +14,10 @@ scripts/
 README.md
 cloudbuild.yaml
 deploy.sh
+.claude/
+CLAUDE.md
+nul
+terraform/
+check_*.py
+find_*.py
+inspect_*.py
