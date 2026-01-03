@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gcloud auth list:*)",
+      "Bash(gcloud config get-value:*)",
+      "Bash(gcloud auth login:*)",
+      "Bash(gcloud config set:*)",
+      "Bash(gcloud config list:*)",
+      "Bash(dir \"C:\\\\dev\\\\phantom\" /b)",
+      "Bash(cat:*)",
+      "Bash(ls -la \"C:\\\\dev\\\\phantom\\\\tests\"\" 2>nul || echo \"Tests directory listing failed \")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
