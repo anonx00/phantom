@@ -22,10 +22,40 @@ import logging
 import os
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
+from functools import lru_cache
+import time
 from google.cloud import firestore
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+
+class TTLCache:
+    """Simple time-based cache for reducing Firestore reads."""
+
+    def __init__(self, ttl_seconds: int = 30):
+        self.ttl = ttl_seconds
+        self._cache: Dict[str, tuple] = {}  # key -> (value, timestamp)
+
+    def get(self, key: str):
+        """Get cached value if not expired."""
+        if key in self._cache:
+            value, timestamp = self._cache[key]
+            if time.time() - timestamp < self.ttl:
+                return value
+            del self._cache[key]
+        return None
+
+    def set(self, key: str, value):
+        """Set cached value with current timestamp."""
+        self._cache[key] = (value, time.time())
+
+    def invalidate(self, key: str = None):
+        """Invalidate specific key or entire cache."""
+        if key:
+            self._cache.pop(key, None)
+        else:
+            self._cache.clear()
 
 
 class AIAgentController:
@@ -60,10 +90,13 @@ class AIAgentController:
         self.interactions_collection = self.db.collection("ai_memory")
         self.budget_collection = self.db.collection("budget_tracking")
 
+        # Cache for reducing Firestore reads (30 second TTL)
+        self._stats_cache = TTLCache(ttl_seconds=30)
+
         # Initialize vector memory for AI context
         from memory_system import VectorMemory
         self.vector_memory = VectorMemory(project_id=project_id)
-        logger.info("✅ Vector memory initialized - AI has context awareness")
+        logger.info("Vector memory initialized - AI has context awareness")
 
         # Daily counters (reset at midnight)
         self._today_str = self._get_today_str()
@@ -75,14 +108,24 @@ class AIAgentController:
         tz = pytz.timezone(Config.TIMEZONE)
         return datetime.now(tz).strftime("%Y-%m-%d")
 
-    def _load_daily_stats(self) -> Dict:
-        """Load today's usage stats from Firestore."""
+    def _load_daily_stats(self, force_refresh: bool = False) -> Dict:
+        """Load today's usage stats from Firestore with caching."""
+        cache_key = f"daily_stats_{self._today_str}"
+
+        # Check cache first (unless forced refresh)
+        if not force_refresh:
+            cached = self._stats_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
         try:
             doc_ref = self.budget_collection.document(f"daily_{self._today_str}")
             doc = doc_ref.get()
 
             if doc.exists:
-                return doc.to_dict()
+                stats = doc.to_dict()
+                self._stats_cache.set(cache_key, stats)
+                return stats
             else:
                 # Initialize new day
                 initial_stats = {
@@ -96,6 +139,7 @@ class AIAgentController:
                     "last_updated": firestore.SERVER_TIMESTAMP
                 }
                 doc_ref.set(initial_stats)
+                self._stats_cache.set(cache_key, initial_stats)
                 return initial_stats
 
         except Exception as e:
@@ -117,8 +161,9 @@ class AIAgentController:
                 stat_name: firestore.Increment(increment),
                 "last_updated": firestore.SERVER_TIMESTAMP
             })
-            # Update local cache
+            # Update local cache and invalidate TTL cache
             self._daily_stats[stat_name] = self._daily_stats.get(stat_name, 0) + increment
+            self._stats_cache.invalidate(f"daily_stats_{self._today_str}")
         except Exception as e:
             logger.error(f"Failed to update stat {stat_name}: {e}")
 
@@ -185,13 +230,20 @@ class AIAgentController:
                 last_check = data.get("last_mention_check")
 
                 if last_check:
-                    # Convert to datetime
+                    # Convert to datetime with proper timezone handling
+                    import pytz
                     if isinstance(last_check, datetime):
                         last_check_time = last_check
+                        # Ensure timezone-aware comparison
+                        if last_check_time.tzinfo is None:
+                            last_check_time = last_check_time.replace(tzinfo=pytz.UTC)
+                        now = datetime.now(pytz.UTC)
                     else:
-                        last_check_time = last_check
+                        # Handle unexpected types gracefully
+                        logger.warning(f"Unexpected last_check type: {type(last_check)}")
+                        return True, "OK to check mentions (timestamp parse issue)"
 
-                    time_since = datetime.now(last_check_time.tzinfo) - last_check_time
+                    time_since = now - last_check_time
                     minutes_since = time_since.total_seconds() / 60
 
                     if minutes_since < 15:

@@ -245,6 +245,14 @@ class CivitAIVideoDownloader:
 
         return unique_videos
 
+    # Allowed domains for video downloads (security)
+    ALLOWED_VIDEO_DOMAINS = [
+        'civitai.com',
+        'cdn.civitai.com',
+        'image.civitai.com',
+        'video.civitai.com',
+    ]
+
     def download_video(self, video_url: str) -> Optional[str]:
         """
         Download a video to a temporary file.
@@ -256,7 +264,16 @@ class CivitAIVideoDownloader:
             Path to downloaded video file, or None on failure
         """
         try:
-            logger.info(f"Downloading video: {video_url[:80]}...")
+            # Validate domain for security (prevent SSRF)
+            from urllib.parse import urlparse
+            parsed = urlparse(video_url)
+            if not any(domain in parsed.netloc for domain in self.ALLOWED_VIDEO_DOMAINS):
+                logger.warning(f"Untrusted video domain rejected: {parsed.netloc}")
+                return None
+
+            # Log URL without query params for security
+            safe_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path[:50]}..."
+            logger.info(f"Downloading video: {safe_url}")
 
             response = requests.get(
                 video_url,

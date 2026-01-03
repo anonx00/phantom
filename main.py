@@ -212,11 +212,18 @@ def post_video(api_v1, client_v2, brain, controller, strategy):
         downloader = CivitAIVideoDownloader()
         video_path = downloader.get_video_for_prompt(strategy.get("video_prompt", ""))
 
-        if not video_path:
+        if not video_path or not os.path.exists(video_path):
             raise RuntimeError("CivitAI download failed")
 
+        content = strategy.get("content", "")
+        if not content:
+            raise ValueError("Missing content in strategy")
+
         media = upload_media_v1(api_v1, video_path, chunked=True, media_category="tweet_video")
-        response = post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
+        if not media or not hasattr(media, 'media_id'):
+            raise RuntimeError("Media upload returned invalid object")
+
+        response = post_tweet_v2(client_v2, text=content, media_ids=[media.media_id])
 
         logger.info(f"Video posted: {response.data['id']}")
         brain.log_post(strategy, success=True)
@@ -230,8 +237,8 @@ def post_video(api_v1, client_v2, brain, controller, strategy):
         if video_path and os.path.exists(video_path):
             try:
                 os.remove(video_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to clean up video file {video_path}: {e}")
 
 
 def post_infographic(api_v1, client_v2, brain, controller, strategy):
@@ -242,8 +249,12 @@ def post_infographic(api_v1, client_v2, brain, controller, strategy):
         image_prompt = strategy.get("image_prompt") or f"Professional infographic about {topic}"
         image_path = brain.generate_image(image_prompt)
 
+        content = strategy.get("content", "")
+        if not content:
+            raise ValueError("Missing content in strategy")
+
         media = upload_media_v1(api_v1, image_path)
-        post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
+        post_tweet_v2(client_v2, text=content, media_ids=[media.media_id])
 
         logger.info("Infographic posted")
         brain.log_post(strategy, success=True)
@@ -257,8 +268,8 @@ def post_infographic(api_v1, client_v2, brain, controller, strategy):
         if image_path and os.path.exists(image_path):
             try:
                 os.remove(image_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to clean up image file {image_path}: {e}")
 
 
 def post_meme(api_v1, client_v2, brain, controller, strategy):
@@ -272,15 +283,19 @@ def post_meme(api_v1, client_v2, brain, controller, strategy):
             else:
                 media = upload_media_v1(api_v1, image_path)
 
-            post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
+            post_tweet_v2(client_v2, text=strategy.get("content", ""), media_ids=[media.media_id])
             logger.info("Meme posted")
             brain.log_post(strategy, success=True)
             controller.record_post_created("meme")
         else:
             # No image - post as text
-            content = strategy["content"]
+            content = strategy.get("content", "")
             if isinstance(content, list):
+                if not content:
+                    raise ValueError("Empty content list in strategy")
                 content = content[0]
+            if not content:
+                raise ValueError("Missing content in strategy")
             post_tweet_v2(client_v2, text=content)
             logger.info("Meme text posted")
             brain.log_post(strategy, success=True)
@@ -288,9 +303,11 @@ def post_meme(api_v1, client_v2, brain, controller, strategy):
 
     except Exception as e:
         logger.error(f"Meme failed: {e}")
-        content = strategy["content"]
+        content = strategy.get("content", "")
         if isinstance(content, list):
-            content = content[0]
+            content = content[0] if content else ""
+        if not content:
+            raise
         try:
             post_tweet_v2(client_v2, text=content)
             brain.log_post(strategy, success=True, error=str(e))
@@ -302,8 +319,8 @@ def post_meme(api_v1, client_v2, brain, controller, strategy):
         if image_path and os.path.exists(image_path):
             try:
                 os.remove(image_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to clean up meme file {image_path}: {e}")
 
 
 def post_image(api_v1, client_v2, brain, controller, strategy):
@@ -315,8 +332,12 @@ def post_image(api_v1, client_v2, brain, controller, strategy):
             raise ValueError("Missing image_prompt")
 
         image_path = brain.generate_image(image_prompt)
+        content = strategy.get("content", "")
+        if not content:
+            raise ValueError("Missing content in strategy")
+
         media = upload_media_v1(api_v1, image_path)
-        post_tweet_v2(client_v2, text=strategy["content"], media_ids=[media.media_id])
+        post_tweet_v2(client_v2, text=content, media_ids=[media.media_id])
 
         logger.info("Image posted")
         brain.log_post(strategy, success=True)
@@ -330,15 +351,19 @@ def post_image(api_v1, client_v2, brain, controller, strategy):
         if image_path and os.path.exists(image_path):
             try:
                 os.remove(image_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to clean up image file {image_path}: {e}")
 
 
 def post_thought(client_v2, brain, controller, strategy):
     """Post AI thought/reflection."""
-    text = strategy["content"]
+    text = strategy.get("content", "")
     if isinstance(text, list):
+        if not text:
+            raise ValueError("Empty content list in strategy")
         text = text[0]
+    if not text:
+        raise ValueError("Missing content in strategy")
 
     if len(text) > 280:
         text = text[:277] + "..."
@@ -351,9 +376,13 @@ def post_thought(client_v2, brain, controller, strategy):
 
 def post_text(client_v2, brain, controller, strategy):
     """Post text/thread content."""
-    tweets = strategy["content"]
+    tweets = strategy.get("content", "")
+    if not tweets:
+        raise ValueError("Missing content in strategy")
     if isinstance(tweets, str):
         tweets = [tweets]
+    if not tweets:
+        raise ValueError("Empty content list in strategy")
 
     previous_id = None
     for tweet_text in tweets:
@@ -375,14 +404,22 @@ def post_text(client_v2, brain, controller, strategy):
 def post_fallback_text(client_v2, brain, controller, strategy, original_error):
     """Fallback to text when media fails."""
     try:
-        caption = strategy['content']
+        caption = strategy.get('content', '')
+        if isinstance(caption, list):
+            caption = caption[0] if caption else ''
+        if not caption:
+            raise ValueError("No content for fallback text")
+
         source_url = strategy.get('source_url')
 
         if source_url:
             text = f"{caption}\n\n{source_url}"
             if len(text) > 280:
-                max_len = 280 - len(source_url) - 4
-                text = f"{caption[:max_len]}...\n\n{source_url}"
+                max_len = max(20, 280 - len(source_url) - 4)  # Ensure minimum caption length
+                if max_len <= 20:
+                    text = source_url[:280]  # Just post URL if no room for caption
+                else:
+                    text = f"{caption[:max_len]}...\n\n{source_url}"
         else:
             text = caption if len(caption) <= 280 else caption[:277] + "..."
 

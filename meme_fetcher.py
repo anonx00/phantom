@@ -184,21 +184,22 @@ class RedditSource(MemeSource):
 class GiphySource(MemeSource):
     """Fetches trending GIFs from Giphy."""
 
-    # Fallback public beta key (rate limited)
-    FALLBACK_KEY = "dc6zaTOxFJmzC"
     _api_key = None
+    _api_key_available = None
 
     @classmethod
-    def _get_api_key(cls) -> str:
-        """Get Giphy API key from secrets, fallback to public key."""
-        if cls._api_key is None:
+    def _get_api_key(cls) -> Optional[str]:
+        """Get Giphy API key from secrets. Returns None if not configured."""
+        if cls._api_key_available is None:
             try:
                 from config import get_secret
                 cls._api_key = get_secret("GIPHY_API_KEY").strip()
-                logger.info("Using Giphy API key from secrets")
-            except Exception as e:
-                logger.debug(f"Giphy secret not found, using public key: {e}")
-                cls._api_key = cls.FALLBACK_KEY
+                cls._api_key_available = True
+                logger.info("Giphy API key configured")
+            except Exception:
+                cls._api_key_available = False
+                cls._api_key = None
+                logger.debug("Giphy API key not configured - Giphy source disabled")
         return cls._api_key
 
     def get_source_name(self) -> str:
@@ -218,9 +219,21 @@ class GiphySource(MemeSource):
         memes = []
         api_key = self._get_api_key()
 
+        # Skip if no API key configured
+        if not api_key:
+            logger.debug("Giphy source skipped - no API key")
+            return memes
+
         try:
-            # Try trending first
-            url = f"https://api.giphy.com/v1/gifs/search?api_key={api_key}&q={query}&limit={limit}&rating=g"
+            # Use urlencode for safe URL construction
+            from urllib.parse import urlencode
+            params = urlencode({
+                'api_key': api_key,
+                'q': query,
+                'limit': limit,
+                'rating': 'g'
+            })
+            url = f"https://api.giphy.com/v1/gifs/search?{params}"
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             data = response.json()
